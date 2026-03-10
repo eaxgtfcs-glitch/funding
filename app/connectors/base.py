@@ -2,8 +2,10 @@ import asyncio
 import dataclasses
 import logging
 from abc import ABC, abstractmethod
+from collections.abc import Callable, Coroutine
 from datetime import datetime, timezone
 from decimal import Decimal
+from typing import Any
 
 from app.connectors.config import DEFAULT_CONFIG, ConnectorConfig
 from app.connectors.model.funding import FundingSnapshot
@@ -35,6 +37,8 @@ class BaseExchangeConnector(ABC):
             funding_rates_update_time=datetime.now(tz=timezone.utc),
         )
         self._tasks: list[asyncio.Task] = []
+        self.on_margin_updated: Callable[[], Coroutine[Any, Any, None]] | None = None
+        self.on_positions_updated: Callable[[], Coroutine[Any, Any, None]] | None = None
 
     @abstractmethod
     async def fetch_positions(self) -> list[Position]:
@@ -82,8 +86,10 @@ class BaseExchangeConnector(ABC):
                     if ticker not in fetched_tickers:
                         del self.state.positions[ticker]
                 self.state.positions_update_time = datetime.now(tz=timezone.utc)
-            except Exception:
-                logger.exception("Ошибка при обновлении позиций [%s]", self.name)
+                if self.on_positions_updated:
+                    await self.on_positions_updated()
+            except Exception as e:
+                logger.exception("Ошибка при обновлении позиций [%s]", self.name, e)
             await asyncio.sleep(self.config.positions_interval)
 
     async def _loop_margin(self) -> None:
@@ -92,9 +98,16 @@ class BaseExchangeConnector(ABC):
                 maintenance_margin, current_margin = await self.fetch_margin()
                 self.state.maintenance_margin = maintenance_margin
                 self.state.current_margin = current_margin
+                self.state.margin_ratio = (
+                    maintenance_margin * 100 / current_margin
+                    if current_margin > 0
+                    else None
+                )
                 self.state.maintenance_margin_update_time = datetime.now(tz=timezone.utc)
-            except Exception:
-                logger.exception("Ошибка при обновлении маржи [%s]", self.name)
+                if self.on_margin_updated:
+                    await self.on_margin_updated()
+            except Exception as exc:
+                logger.exception("Ошибка при обновлении маржи [%s]", self.name, exc)
             await asyncio.sleep(self.config.margin_interval)
 
     async def _loop_funding(self) -> None:
@@ -107,11 +120,11 @@ class BaseExchangeConnector(ABC):
                         snapshot = FundingSnapshot(ticker=ticker, rate=rate, timestamp=now)
                         self.state.funding_rates[ticker] = snapshot
                         self.state.funding_rates_history.setdefault(ticker, []).append(snapshot)
-                    except Exception:
-                        logger.exception("Ошибка при обновлении фандинга [%s] %s", self.name, ticker)
+                    except Exception as exc:
+                        logger.exception("Ошибка при обновлении фандинга [%s] %s", self.name, ticker, exc)
                 self.state.funding_rates_update_time = now
-            except Exception:
-                logger.exception("Ошибка в цикле фандинга [%s]", self.name)
+            except Exception as exc:
+                logger.exception("Ошибка в цикле фандинга [%s]", self.name, exc)
             await asyncio.sleep(self.config.funding_interval)
 
     async def _ensure_funding(self, ticker: str) -> None:
@@ -124,5 +137,5 @@ class BaseExchangeConnector(ABC):
             snapshot = FundingSnapshot(ticker=ticker, rate=rate, timestamp=now)
             self.state.funding_rates[ticker] = snapshot
             self.state.funding_rates_history.setdefault(ticker, []).append(snapshot)
-        except Exception:
-            logger.exception("Ошибка при первичном запросе фандинга [%s] %s", self.name, ticker)
+        except Exception as exc:
+            logger.exception("Ошибка при первичном запросе фандинга [%s] %s", self.name, ticker, exc)

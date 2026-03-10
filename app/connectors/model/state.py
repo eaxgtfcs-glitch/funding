@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -21,3 +21,4 @@ class ExchangeState:
     positions_update_time: datetime
     maintenance_margin_update_time: datetime
     funding_rates_update_time: datetime
+    margin_ratio: Decimal | None = field(default=None)

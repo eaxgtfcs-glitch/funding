@@ -10,3 +10,6 @@ class ConnectorConfig:
 
 
 DEFAULT_CONFIG = ConnectorConfig()
+
+CRITICAL_ALERT_SEND_COUNT: int = int(os.environ.get("CRITICAL_ALERT_SEND_COUNT", "3"))
+CRITICAL_ALERT_REPEAT_INTERVAL: int = int(os.environ.get("CRITICAL_ALERT_REPEAT_INTERVAL", "5"))

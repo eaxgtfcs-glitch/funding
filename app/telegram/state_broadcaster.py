@@ -106,7 +106,7 @@ class StateBroadcaster:
             try:
                 await self._service.edit_message(chat_id, existing_id, text)
                 return
-            except Exception:
+            except Exception as exc:
                 # Сообщение удалено вручную или недоступно — создаём новое
                 logger.warning(
                     "Failed to edit message %s in chat %s for %s, sending new",

@@ -80,6 +80,64 @@ def _fmt_price(value: Decimal) -> str:
     return f"{integer_part}.{decimal_part}"
 
 
+def _fmt_margin_ratio(ratio: Decimal | None) -> str:
+    if ratio is None:
+        return f"{0.0:.1f}%"
+    v = float(ratio)
+    if v <= 30:
+        color = "🟢"
+    elif v <= 50:
+        color = "🟡"
+    else:
+        color = "🔴"
+    return f"{color} {v:.1f}%"
+
+
+def format_high_margin_ratio_alert(state: ExchangeState) -> str:
+    ratio = state.margin_ratio
+    ratio_str = f"{float(ratio):.1f}%" if ratio is not None else "N/A"
+    return (
+        f"<b>HIGH LIQUIDATION RISK</b> — {state.name}\n"
+        f"Margin ratio: <code>{ratio_str}</code>  (maintenance / current)\n"
+        f"Maintenance: <code>{_fmt_num(state.maintenance_margin)} USDT</code>\n"
+        f"Current:     <code>{_fmt_num(state.current_margin)} USDT</code>\n"
+        f"Time: {state.maintenance_margin_update_time.isoformat(timespec='seconds')}"
+    )
+
+
+def format_stale_data_alert(exchange_name: str, field_name: str, last_update: datetime, now: datetime) -> str:
+    delta_seconds = int((now - last_update).total_seconds())
+    ts = last_update.isoformat(timespec="seconds")
+    return (
+        f"<b>STALE DATA</b> — {exchange_name}\n"
+        f"<code>{field_name}</code> not updated for <code>{delta_seconds}s</code>.\n"
+        f"Last update: {ts}"
+    )
+
+
+def format_position_reduction_batch(reductions: list[dict]) -> str:
+    """reductions — список словарей с ключами: exchange_name, ticker, old_amount, new_amount, counterpart."""
+    lines = [f"<b>POSITION REDUCED</b> ({len(reductions)} event(s))"]
+    for r in reductions:
+        lines.append("")
+        lines.append(f"<b>{r['exchange_name']}</b>  <code>{r['ticker']}</code>")
+        lines.append(f"  Amount: <code>{r['old_amount']}</code> → <code>{r['new_amount']}</code>")
+        if r["new_amount"] == Decimal(0):
+            lines.append("  <b>Fully closed (liquidation/ADL?)</b>")
+        counterpart = r.get("counterpart")
+        if counterpart:
+            lines.append("  Paired position (action may be needed):")
+            lines.append(
+                f"    {counterpart.exchange_name}  {counterpart.ticker}"
+                f"  {counterpart.direction}  {counterpart.amount}"
+            )
+    return "\n".join(lines)
+
+
+def format_session_start_separator() -> str:
+    return "<b>— — — NEW SESSION STARTED — — —</b>\nPrevious reduction alerts above are outdated."
+
+
 def format_exchange_state(state: ExchangeState) -> str:
     lines: list[str] = []
 
@@ -90,12 +148,9 @@ def format_exchange_state(state: ExchangeState) -> str:
     # Margin
     lines.append("<b>Margin</b>")
     if state.maintenance_margin > 0:
-        margin_pct = state.current_margin / state.maintenance_margin * 100
         lines.append(f"  Current:  <code>{_fmt_num(state.current_margin)} USDT</code>")
-        lines.append(
-            f"  Required: <code>{_fmt_num(state.maintenance_margin)} USDT</code>"
-            f"  ({float(margin_pct):.1f}%)"
-        )
+        lines.append(f"  Required: <code>{_fmt_num(state.maintenance_margin)} USDT</code>")
+        lines.append(f"  Ratio:    <code>{_fmt_margin_ratio(state.margin_ratio)}</code>")
     else:
         lines.append(f"  Current:  <code>{_fmt_num(state.current_margin)} USDT</code>")
         lines.append(f"  Required: <code>{_fmt_num(state.maintenance_margin)} USDT</code>")
