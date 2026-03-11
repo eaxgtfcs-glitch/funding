@@ -1,8 +1,16 @@
 from datetime import datetime
+from datetime import timezone as _tz
 from decimal import Decimal
 
+from app.connectors.config import get_notify_tz
 from app.connectors.model.position import Position
 from app.connectors.model.state import ExchangeState
+
+
+def _to_notify_tz(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=_tz.utc)
+    return dt.astimezone(get_notify_tz())
 
 
 def format_margin_alert(state: ExchangeState, threshold_pct: Decimal) -> str:
@@ -17,7 +25,7 @@ def format_margin_alert(state: ExchangeState, threshold_pct: Decimal) -> str:
         f"Maintenance margin: <code>{state.maintenance_margin:.2f}</code>\n"
         f"Current margin:     <code>{state.current_margin:.2f}</code>\n"
         f"Remaining:          <code>{pct_remaining:.1f}%</code> (threshold {threshold_pct * 100:.0f}%)\n"
-        f"Time: {state.maintenance_margin_update_time.isoformat(timespec='seconds')}"
+        f"Time: {_to_notify_tz(state.maintenance_margin_update_time).strftime('%Y-%m-%dT%H:%M:%S %Z')}"
     )
 
 
@@ -35,7 +43,7 @@ def format_position_reduction_alert(
     ]
     # отдельно помечаем полное закрытие — вероятная ликвидация
     if new_amount == Decimal(0):
-        lines.append("<b>Position fully closed (liquidation/ADL?)</b>")
+        lines.append("<b>Position fully closed</b>")
 
     # если известна парная позиция — добавляем её детали в алерт
     if counterpart:
@@ -57,7 +65,7 @@ def format_position_reduction_alert(
 def format_stale_connector_alert(exchange_name: str, last_update: datetime, now: datetime) -> str:
     """last_update and now may be tz-aware or naive — both must be the same kind."""
     delta_seconds = int((now - last_update).total_seconds())
-    ts = last_update.isoformat(timespec="seconds")
+    ts = _to_notify_tz(last_update).strftime("%Y-%m-%dT%H:%M:%S %Z")
     return (
         f"<b>STALE CONNECTOR</b> — {exchange_name}\n"
         f"No update received for <code>{delta_seconds}s</code>.\n"
@@ -101,13 +109,13 @@ def format_high_margin_ratio_alert(state: ExchangeState) -> str:
         f"Margin ratio: <code>{ratio_str}</code>  (maintenance / current)\n"
         f"Maintenance: <code>{_fmt_num(state.maintenance_margin)} USDT</code>\n"
         f"Current:     <code>{_fmt_num(state.current_margin)} USDT</code>\n"
-        f"Time: {state.maintenance_margin_update_time.isoformat(timespec='seconds')}"
+        f"Time: {_to_notify_tz(state.maintenance_margin_update_time).strftime('%Y-%m-%dT%H:%M:%S %Z')}"
     )
 
 
 def format_stale_data_alert(exchange_name: str, field_name: str, last_update: datetime, now: datetime) -> str:
     delta_seconds = int((now - last_update).total_seconds())
-    ts = last_update.isoformat(timespec="seconds")
+    ts = _to_notify_tz(last_update).strftime("%Y-%m-%dT%H:%M:%S %Z")
     return (
         f"<b>STALE DATA</b> — {exchange_name}\n"
         f"<code>{field_name}</code> not updated for <code>{delta_seconds}s</code>.\n"
@@ -123,7 +131,7 @@ def format_position_reduction_batch(reductions: list[dict]) -> str:
         lines.append(f"<b>{r['exchange_name']}</b>  <code>{r['ticker']}</code>")
         lines.append(f"  Amount: <code>{r['old_amount']}</code> → <code>{r['new_amount']}</code>")
         if r["new_amount"] == Decimal(0):
-            lines.append("  <b>Fully closed (liquidation/ADL?)</b>")
+            lines.append("  <b>Fully closed</b>")
         counterpart = r.get("counterpart")
         if counterpart:
             lines.append("  Paired position (action may be needed):")
@@ -182,13 +190,14 @@ def format_exchange_state(state: ExchangeState) -> str:
             )
     lines.append("")
 
-    # Funding rates (только текущие, без истории)
-    funding = state.funding_rates
+    # Funding rates (только текущие, без истории, только по открытым позициям)
     lines.append("<b>Funding Rates</b>")
-    if not funding:
+    open_tickers = state.positions.keys()
+    funding_for_open = {t: s for t, s in state.funding_rates.items() if t in open_tickers}
+    if not funding_for_open:
         lines.append("  No data")
     else:
-        for ticker, snapshot in funding.items():
+        for ticker, snapshot in funding_for_open.items():
             rate_pct = snapshot.rate * 100
             sign = "+" if snapshot.rate >= 0 else ""
             lines.append(f"  <code>{ticker:<10}</code> {sign}{float(rate_pct):.4f}%")
@@ -200,6 +209,8 @@ def format_exchange_state(state: ExchangeState) -> str:
         state.maintenance_margin_update_time,
         state.funding_rates_update_time,
     )
-    lines.append(f"Updated: {latest.strftime('%H:%M:%S.%f')[:-3]} UTC")
+    latest_local = _to_notify_tz(latest)
+    tz_label = latest_local.strftime("%Z") or latest_local.strftime("%z")
+    lines.append(f"Updated: {latest_local.strftime('%H:%M:%S.%f')[:-3]} {tz_label}")
 
     return "\n".join(lines)

@@ -243,7 +243,19 @@ files = [
     { file = "typing_extensions-4.15.0.tar.gz", hash = "sha256:0cea48d173cc12fa28ecabc3b837ea3cf6f38c6d1136f85cbaaf598984861466" },
 ]
 
+[[package]]
+name = "tzdata"
+version = "2025.3"
+description = "Provider of IANA time zone data"
+optional = false
+python-versions = ">=2"
+groups = ["main"]
+files = [
+    { file = "tzdata-2025.3-py2.py3-none-any.whl", hash = "sha256:06a47e5700f3081aab02b2e513160914ff0694bce9947d6b76ebd6bf57cfc5d1" },
+    { file = "tzdata-2025.3.tar.gz", hash = "sha256:de39c2ca5dc7b0344f2eba86f49d614019d29f060fc4ebc8a417896a620b56a7" },
+]
+
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.12"
-content-hash = "7f9bdf16e21cacd961ca546b8e99ffd064d764d4bb9c47b17262cf04689ae9cd"
+content-hash = "15547f32375c8fb8df958894262a7bd9765911deceb9d1f8d1e5e523fe75a96e"

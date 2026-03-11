@@ -6,12 +6,9 @@ import time
 from decimal import Decimal
 
 import httpx
-from dotenv import load_dotenv
 
 from app.connectors.base import BaseExchangeConnector
 from app.connectors.model.position import Position
-
-load_dotenv()
 
 _BASE_URL = "https://api.bybit.com"
 _RECV_WINDOW = "5000"

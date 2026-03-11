@@ -123,6 +123,63 @@ class TelegramAlertService:
             )
             raise
 
+    async def get_updates(self, offset: int | None = None) -> list[dict]:
+        if self._client is None:
+            return []
+        params = {"timeout": 10, "allowed_updates": ["message"]}
+        if offset is not None:
+            params["offset"] = offset
+        try:
+            resp = await self._client.get(f"{self._base}/getUpdates", params=params, timeout=15)
+            data = resp.json()
+            if data.get("ok"):
+                return data.get("result", [])
+        except Exception as e:
+            logger.debug("get_updates error: %s", e)
+        return []
+
+    def start_polling(self) -> None:
+        self._offset: int | None = None
+        self._polling_task: asyncio.Task | None = None
+        self._polling_task = asyncio.create_task(self._polling_loop())
+
+    async def stop_polling(self) -> None:
+        if getattr(self, "_polling_task", None):
+            self._polling_task.cancel()
+            try:
+                await self._polling_task
+            except asyncio.CancelledError:
+                pass
+            self._polling_task = None
+
+    async def _polling_loop(self) -> None:
+        while True:
+            try:
+                updates = await self.get_updates(offset=self._offset)
+                for update in updates:
+                    self._offset = update["update_id"] + 1
+                    msg = update.get("message") or update.get("channel_post")
+                    if not msg:
+                        continue
+                    chat = msg.get("chat", {})
+                    chat_id = chat.get("id")
+                    chat_type = chat.get("type", "unknown")
+                    sender = msg.get("from") or {}
+                    from_user = sender.get("username") or sender.get("first_name") or "unknown"
+                    text = msg.get("text") or msg.get("caption") or "[non-text]"
+                    logger.info(
+                        "TG incoming: chat_id=%s type=%s from=%s text=%r",
+                        chat_id,
+                        chat_type,
+                        from_user,
+                        text,
+                    )
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.warning("Error in TG polling loop: %s", exc)
+            await asyncio.sleep(1)
+
     async def delete_message(self, chat_id: str, message_id: int) -> None:
         """Delete a message."""
         if not self._client:

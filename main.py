@@ -9,6 +9,8 @@ logger = logging.getLogger(__name__)
 
 
 async def main() -> None:
+    from dotenv import load_dotenv
+    load_dotenv()
     from app.engine.engine import MonitoringEngine
     engine = MonitoringEngine()
     await engine.start()

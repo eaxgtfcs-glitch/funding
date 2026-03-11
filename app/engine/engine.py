@@ -7,8 +7,6 @@ import pkgutil
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from dotenv import load_dotenv
-
 import app.connectors as connectors_pkg
 from app.connectors.base import BaseExchangeConnector
 from app.connectors.config import (
@@ -38,7 +36,6 @@ def _parse_chat_ids(raw: str) -> list[str]:
 class MonitoringEngine:
 
     def __init__(self) -> None:
-        load_dotenv()
         self._connectors: list[BaseExchangeConnector] = []
         self.states: dict[str, ExchangeState] = {}
         self._pairs: list[Pair] = []
@@ -237,6 +234,7 @@ class MonitoringEngine:
         await asyncio.gather(*(c.start() for c in self._connectors))
         if self._telegram:
             await self._telegram.start()
+            self._telegram.start_polling()
         if self._broadcaster:
             await self._broadcaster.start()
         await self._send_session_start()
@@ -252,5 +250,6 @@ class MonitoringEngine:
         if self._broadcaster:
             await self._broadcaster.stop()
         if self._telegram:
+            await self._telegram.stop_polling()
             await self._telegram.stop()
         await asyncio.gather(*(c.stop() for c in self._connectors))
