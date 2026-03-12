@@ -170,18 +170,18 @@ def format_exchange_state(state: ExchangeState) -> str:
     lines: list[str] = []
 
     # Header
-    lines.append(f"<b>{state.name.upper()}  |  ONLINE</b>")
+    lines.append(f"<b><code>{state.name}</code></b>")
     lines.append("")
 
     # Margin
     lines.append("<b>Margin</b>")
     if state.maintenance_margin > 0:
-        lines.append(f"  Current:  <code>{_fmt_num(state.current_margin)} USDT</code>")
-        lines.append(f"  Required: <code>{_fmt_num(state.maintenance_margin)} USDT</code>")
+        lines.append(f"  Current:  <code>{_fmt_num(state.current_margin)}</code>")
+        lines.append(f"  Required: <code>{_fmt_num(state.maintenance_margin)}</code>")
         lines.append(f"  Ratio:    <code>{_fmt_margin_ratio(state.margin_ratio)}</code>")
     else:
-        lines.append(f"  Current:  <code>{_fmt_num(state.current_margin)} USDT</code>")
-        lines.append(f"  Required: <code>{_fmt_num(state.maintenance_margin)} USDT</code>")
+        lines.append(f"  Current:  <code>{_fmt_num(state.current_margin)}</code>")
+        lines.append(f"  Required: <code>{_fmt_num(state.maintenance_margin)}</code>")
     lines.append("")
 
     # Positions
@@ -197,15 +197,13 @@ def format_exchange_state(state: ExchangeState) -> str:
                 pnl = raw_pnl if pos.direction == "long" else -raw_pnl
             else:
                 pnl = Decimal(0)
-
+            emoji_a = "🟢" if pos.direction == "long" else "🔴"
             # 📈 когда позиция в плюсе (независимо от направления), 📉 когда в минусе
             trend_emoji = "\U0001f4c8" if pnl >= 0 else "\U0001f4c9"
             sign = "+" if pnl >= 0 else ""
             lines.append(
-                f"  <code>{pos.ticker:<10}</code> {pos.direction.upper():<5} "
+                f"  <code>{pos.ticker:<10}</code> {emoji_a:<5} "
                 f"<code>{pos.amount}</code>  "
-                f"avg <code>{_fmt_price(pos.avg_price)}</code>  "
-                f"now <code>{_fmt_price(pos.current_price)}</code>  "
                 f"{trend_emoji} {sign}{float(pnl):.2f}%"
             )
     lines.append("")

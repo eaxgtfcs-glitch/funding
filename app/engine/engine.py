@@ -76,6 +76,8 @@ class MonitoringEngine:
         self._margin_ratio_alerted: dict[str, bool] = {}
         # Флаги "алерт уже отправлен" для пар, чтобы не спамить
         self._pairs_reduction_alerted: dict[tuple[str, str], bool] = {}
+        # Ключи пар, для которых уже отправлен алерт о неизвестном коннекторе
+        self._pairs_config_error_alerted: set[str] = set()
         # Задачи фоновых циклов движка
         self._engine_tasks: list[asyncio.Task] = []
         self._pending_tasks: set[asyncio.Task] = set()
@@ -90,15 +92,19 @@ class MonitoringEngine:
             importlib.import_module(f"{pkg_name}.{module_info.name}")
 
         for subclass in BaseExchangeConnector.__subclasses__():
-            if inspect.isabstract(subclass):
+            try:
+                if inspect.isabstract(subclass):
+                    continue
+                connector = subclass()
+                self._connectors.append(connector)
+                self.states[connector.name] = connector.state
+                self._prev_amounts[connector.name] = {}
+                self._margin_ratio_alerted[connector.name] = False
+                connector.on_margin_updated = lambda c=connector: self._on_margin_updated(c)
+                connector.on_positions_updated = lambda c=connector: self._on_positions_updated(c)
+            except Exception as e:
+                logger.warning(f"Failed to initialize connector {subclass.__name__}: {e}")
                 continue
-            connector = subclass()
-            self._connectors.append(connector)
-            self.states[connector.name] = connector.state
-            self._prev_amounts[connector.name] = {}
-            self._margin_ratio_alerted[connector.name] = False
-            connector.on_margin_updated = lambda c=connector: self._on_margin_updated(c)
-            connector.on_positions_updated = lambda c=connector: self._on_positions_updated(c)
 
     def _setup_telegram(self) -> None:
         bot_token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
@@ -263,6 +269,19 @@ class MonitoringEngine:
             ticker_b = entry["ticker_b"]
             size_a = Decimal(str(entry["size_a"]))
             size_b = Decimal(str(entry["size_b"]))
+
+            pair_key = f"{exchange_a}/{ticker_a}—{exchange_b}/{ticker_b}"
+            if exchange_a not in self.states or exchange_b not in self.states:
+                missing = [e for e in (exchange_a, exchange_b) if e not in self.states]
+                if pair_key not in self._pairs_config_error_alerted:
+                    msg = f"<b>PAIR CONFIG ERROR</b>\nUnknown connector(s): {', '.join(missing)}\nPair {exchange_a}/{ticker_a} — {exchange_b}/{ticker_b} skipped."
+                    task = asyncio.create_task(self._send_critical_alert(msg))
+                    self._pending_tasks.add(task)
+                    task.add_done_callback(self._pending_tasks.discard)
+                    self._pairs_config_error_alerted.add(pair_key)
+                continue
+            else:
+                self._pairs_config_error_alerted.discard(pair_key)
 
             state_a = self.states.get(exchange_a)
             pos_a = state_a.positions.get(ticker_a) if state_a else None
@@ -442,6 +461,8 @@ class MonitoringEngine:
 
     async def start(self) -> None:
         await asyncio.gather(*(c.start() for c in self._connectors))
+        pairs_init_delay = int(os.environ.get("PAIRS_INIT_DELAY", "10"))
+        await asyncio.sleep(pairs_init_delay)
         pairs, active_raw = self._load_pairs_from_file()
         self._pairs = pairs
         self._check_pairs_reductions(active_raw)
