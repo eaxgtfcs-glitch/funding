@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 from pathlib import Path
+from typing import Callable
 
 from app.connectors.model.state import ExchangeState
 from app.telegram.formatters import format_exchange_state
@@ -10,7 +11,7 @@ from app.telegram.service import TelegramAlertService
 logger = logging.getLogger(__name__)
 
 # Путь к файлу с сохранёнными message_id (рядом с main.py, т.е. корень проекта)
-_STATE_FILE = Path(__file__).parent.parent.parent / ".state_messages.json"
+_STATE_FILE = Path(__file__).parent.parent.parent / "data" / ".state_messages.json"
 
 
 def _load_saved_ids() -> dict[str, dict[str, int]]:
@@ -40,11 +41,13 @@ class StateBroadcaster:
             states: dict[str, ExchangeState],
             chat_ids: list[str],
             update_interval: int = 30,
+            pairs_state_fn: Callable[[], str] | None = None,
     ) -> None:
         self._service = service
         self._states = states
         self._chat_ids = chat_ids
         self._update_interval = update_interval
+        self._pairs_state_fn = pairs_state_fn
         # {chat_id: {exchange_name: message_id}}
         self._message_ids: dict[str, dict[str, int]] = {}
         self._task: asyncio.Task | None = None
@@ -69,6 +72,15 @@ class StateBroadcaster:
                     if chat_id not in self._message_ids:
                         self._message_ids[chat_id] = {}
                     self._message_ids[chat_id][exchange_name] = message_id
+
+        if self._pairs_state_fn is not None:
+            pairs_text = self._pairs_state_fn()
+            for chat_id in self._chat_ids:
+                message_id = await self._service.send_message(chat_id, pairs_text)
+                if message_id is not None:
+                    if chat_id not in self._message_ids:
+                        self._message_ids[chat_id] = {}
+                    self._message_ids[chat_id]["__pairs__"] = message_id
 
         _save_ids(self._message_ids)
 
@@ -98,6 +110,10 @@ class StateBroadcaster:
             text = format_exchange_state(state)
             for chat_id in self._chat_ids:
                 coros.append(self._update_one(chat_id, exchange_name, text))
+        if self._pairs_state_fn is not None:
+            pairs_text = self._pairs_state_fn()
+            for chat_id in self._chat_ids:
+                coros.append(self._update_one(chat_id, "__pairs__", pairs_text))
         await asyncio.gather(*coros, return_exceptions=True)
 
     async def _update_one(self, chat_id: str, exchange_name: str, text: str) -> None:

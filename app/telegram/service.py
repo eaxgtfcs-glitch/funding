@@ -62,6 +62,33 @@ class TelegramAlertService:
             return_exceptions=True,
         )
 
+    async def send_alert_tracked(self, chat_id: str, message: str) -> int | None:
+        """Send a message and return its message_id, or None on failure."""
+        if not self._client:
+            logger.error("TelegramAlertService not started — cannot send alert")
+            return None
+        payload = {
+            "chat_id": chat_id,
+            "text": message,
+            "parse_mode": "HTML",
+        }
+        try:
+            response = await self._client.post(f"{self._base}/sendMessage", json=payload)
+            response.raise_for_status()
+            return response.json()["result"]["message_id"]
+        except httpx.HTTPStatusError as exc:
+            logger.exception(
+                "Telegram API error for chat %s: %s — %s",
+                chat_id,
+                exc.response.status_code,
+                exc.response.text,
+            )
+        except httpx.RequestError as exc:
+            logger.exception("Telegram request failed for chat %s: %s", chat_id, exc)
+        except (KeyError, ValueError) as exc:
+            logger.exception("Unexpected response format for chat %s: %s", chat_id, exc)
+        return None
+
     async def send_message(self, chat_id: str, text: str) -> int | None:
         """Send a message and return the message_id, or None on failure."""
         if not self._client:

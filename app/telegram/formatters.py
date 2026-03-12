@@ -5,6 +5,7 @@ from decimal import Decimal
 from app.connectors.config import get_notify_tz
 from app.connectors.model.position import Position
 from app.connectors.model.state import ExchangeState
+from app.engine.model.pair import Pair
 
 
 def _to_notify_tz(dt: datetime) -> datetime:
@@ -142,6 +143,25 @@ def format_position_reduction_batch(reductions: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def format_pair_imbalance_batch(reductions: list[dict]) -> str:
+    lines = [f"<b>PAIR IMBALANCED</b> ({len(reductions)} event(s))"]
+    for r in reductions:
+        lines.append("")
+        lines.append(f"<b>{r['exchange_name']}</b>  <code>{r['ticker']}</code>")
+        amount_line = f"  Amount: <code>{r['old_amount']}</code> → <code>{r['new_amount']}</code>"
+        if r["new_amount"] == Decimal(0):
+            amount_line += "  <b>Fully closed</b>"
+        lines.append(amount_line)
+        counterpart = r.get("counterpart")
+        if counterpart:
+            lines.append("  ⚠️ Counterpart still open:")
+            lines.append(
+                f"    {counterpart.exchange_name}  {counterpart.ticker}"
+                f"  {counterpart.direction}  {counterpart.amount}"
+            )
+    return "\n".join(lines)
+
+
 def format_session_start_separator() -> str:
     return "<b>— — — NEW SESSION STARTED — — —</b>\nPrevious reduction alerts above are outdated."
 
@@ -199,4 +219,28 @@ def format_exchange_state(state: ExchangeState) -> str:
     tz_label = latest_local.strftime("%Z") or latest_local.strftime("%z")
     lines.append(f"Updated: {latest_local.strftime('%H:%M:%S.%f')[:-3]} {tz_label}")
 
+    return "\n".join(lines)
+
+
+def format_pairs_state(pairs: list[Pair], states: dict[str, ExchangeState]) -> str:
+    now_local = _to_notify_tz(datetime.now(tz=_tz.utc))
+    tz_label = now_local.strftime("%Z") or now_local.strftime("%z")
+    lines = [f"<b>PAIRS  |  {len(pairs)} active</b>"]
+    if not pairs:
+        lines.append("")
+        lines.append("No active pairs")
+    else:
+        lines.append("")
+        for pair in pairs:
+            pa = pair.position_a
+            pb = pair.position_b
+            emoji_a = "🟢" if pa.direction == "long" else "🔴"
+            emoji_b = "🟢" if pb.direction == "long" else "🔴"
+            ticker = pa.ticker if pa.ticker == pb.ticker else f"{pa.ticker}/{pb.ticker}"
+            lines.append(
+                f" {ticker}  {emoji_a}{pa.exchange_name} {emoji_b}{pb.exchange_name}"
+                f" ({pa.amount}/{pb.amount})"
+            )
+    lines.append("")
+    lines.append(f"Updated: {now_local.strftime('%H:%M:%S')} {tz_label}")
     return "\n".join(lines)
