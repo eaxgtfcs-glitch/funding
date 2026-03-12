@@ -7,6 +7,7 @@ from app.connectors.model.position import Position
 class Pair:
     position_a: Position
     position_b: Position
+    is_active: bool
 
     @property
     def is_valid(self) -> bool:

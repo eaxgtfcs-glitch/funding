@@ -190,24 +190,10 @@ def format_exchange_state(state: ExchangeState) -> str:
             )
     lines.append("")
 
-    # Funding rates (только текущие, без истории, только по открытым позициям)
-    lines.append("<b>Funding Rates</b>")
-    open_tickers = state.positions.keys()
-    funding_for_open = {t: s for t, s in state.funding_rates.items() if t in open_tickers}
-    if not funding_for_open:
-        lines.append("  No data")
-    else:
-        for ticker, snapshot in funding_for_open.items():
-            rate_pct = snapshot.rate * 100
-            sign = "+" if snapshot.rate >= 0 else ""
-            lines.append(f"  <code>{ticker:<10}</code> {sign}{float(rate_pct):.4f}%")
-    lines.append("")
-
-    # Updated — берём наибольшее из трёх времён
+    # Updated — берём наибольшее из двух времён
     latest = max(
         state.positions_update_time,
         state.maintenance_margin_update_time,
-        state.funding_rates_update_time,
     )
     latest_local = _to_notify_tz(latest)
     tz_label = latest_local.strftime("%Z") or latest_local.strftime("%z")

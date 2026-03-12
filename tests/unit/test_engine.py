@@ -30,7 +30,6 @@ class StubConnector(BaseExchangeConnector):
     config = ConnectorConfig(
         positions_interval=0.0,
         margin_interval=0.0,
-        funding_interval=0.0,
     )
 
     async def fetch_positions(self) -> list[Position]:
@@ -38,9 +37,6 @@ class StubConnector(BaseExchangeConnector):
 
     async def fetch_margin(self) -> tuple[Decimal, Decimal]:
         return Decimal(0), Decimal(0)
-
-    async def get_funding(self, ticker: str) -> Decimal:
-        return Decimal(0)
 
 
 class AnotherStubConnector(BaseExchangeConnector):
@@ -50,7 +46,6 @@ class AnotherStubConnector(BaseExchangeConnector):
     config = ConnectorConfig(
         positions_interval=0.0,
         margin_interval=0.0,
-        funding_interval=0.0,
     )
 
     async def fetch_positions(self) -> list[Position]:
@@ -58,9 +53,6 @@ class AnotherStubConnector(BaseExchangeConnector):
 
     async def fetch_margin(self) -> tuple[Decimal, Decimal]:
         return Decimal(0), Decimal(0)
-
-    async def get_funding(self, ticker: str) -> Decimal:
-        return Decimal(0)
 
 
 # ---------------------------------------------------------------------------
@@ -174,7 +166,7 @@ class TestMonitoringEngineStart:
         await engine.start()
 
         try:
-            assert len(connector._tasks) == 3
+            assert len(connector._tasks) == 2
         finally:
             await engine.stop()
 
@@ -216,7 +208,7 @@ class TestMonitoringEngineStop:
         connector = engine._connectors[0]
 
         await engine.start()
-        assert len(connector._tasks) == 3
+        assert len(connector._tasks) == 2
 
         await engine.stop()
 

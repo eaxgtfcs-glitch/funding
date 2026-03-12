@@ -2,7 +2,7 @@
 Тесты для BaseExchangeConnector (app/connectors/base.py).
 
 Конкретный коннектор FakeConnector определён здесь же — это не продовый код,
-а тестовый дубль. Все методы fetch_* и get_funding мокируются через AsyncMock,
+а тестовый дубль. Все методы fetch_* мокируются через AsyncMock,
 чтобы не было обращений к сети.
 """
 import asyncio
@@ -15,7 +15,7 @@ import pytest
 from app.connectors.base import BaseExchangeConnector
 from app.connectors.config import ConnectorConfig
 from app.connectors.model.position import Position
-from tests.unit.conftest import make_position, make_funding_snapshot
+from tests.unit.conftest import make_position
 
 
 # ---------------------------------------------------------------------------
@@ -31,16 +31,12 @@ class FakeConnector(BaseExchangeConnector):
     config = ConnectorConfig(
         positions_interval=0.0,
         margin_interval=0.0,
-        funding_interval=0.0,
     )
 
     async def fetch_positions(self) -> list[Position]:
         raise NotImplementedError  # будет замокан в тестах
 
     async def fetch_margin(self) -> tuple[Decimal, Decimal]:
-        raise NotImplementedError  # будет замокан в тестах
-
-    async def get_funding(self, ticker: str) -> Decimal:
         raise NotImplementedError  # будет замокан в тестах
 
 
@@ -81,70 +77,6 @@ async def run_one_iteration(coro_factory):
 
 
 # ===========================================================================
-# Тесты _ensure_funding
-# ===========================================================================
-
-class TestEnsureFunding:
-
-    def setup_method(self):
-        self.connector = FakeConnector()
-        self.connector.get_funding = AsyncMock(return_value=Decimal("0.0002"))
-
-    async def test_ensure_funding_calls_get_funding_when_ticker_not_in_state(self):
-        await self.connector._ensure_funding("BTCUSDT")
-
-        self.connector.get_funding.assert_awaited_once_with("BTCUSDT")
-
-    async def test_ensure_funding_does_not_call_get_funding_when_ticker_already_known(self):
-        existing = make_funding_snapshot(ticker="BTCUSDT", rate="0.0001")
-        self.connector.state.funding_rates["BTCUSDT"] = existing
-
-        await self.connector._ensure_funding("BTCUSDT")
-
-        self.connector.get_funding.assert_not_awaited()
-
-    async def test_ensure_funding_stores_snapshot_in_funding_rates(self):
-        await self.connector._ensure_funding("ETHUSDT")
-
-        assert "ETHUSDT" in self.connector.state.funding_rates
-        snapshot = self.connector.state.funding_rates["ETHUSDT"]
-        assert snapshot.ticker == "ETHUSDT"
-        assert snapshot.rate == Decimal("0.0002")
-
-    async def test_ensure_funding_appends_to_history(self):
-        await self.connector._ensure_funding("SOLUSDT")
-
-        history = self.connector.state.funding_rates_history.get("SOLUSDT", [])
-        assert len(history) == 1
-        assert history[0].ticker == "SOLUSDT"
-
-    async def test_ensure_funding_does_not_update_state_when_ticker_already_known(self):
-        existing = make_funding_snapshot(ticker="BTCUSDT", rate="0.0001")
-        self.connector.state.funding_rates["BTCUSDT"] = existing
-
-        await self.connector._ensure_funding("BTCUSDT")
-
-        # Снимок не заменился
-        assert self.connector.state.funding_rates["BTCUSDT"] is existing
-
-    async def test_ensure_funding_swallows_exception_from_get_funding(self):
-        self.connector.get_funding = AsyncMock(side_effect=RuntimeError("network error"))
-
-        # Не должно бросать исключение наружу
-        await self.connector._ensure_funding("BTCUSDT")
-
-        assert "BTCUSDT" not in self.connector.state.funding_rates
-
-    async def test_ensure_funding_snapshot_has_utc_timestamp(self):
-        before = datetime.now(tz=timezone.utc)
-        await self.connector._ensure_funding("BTCUSDT")
-        after = datetime.now(tz=timezone.utc)
-
-        snapshot = self.connector.state.funding_rates["BTCUSDT"]
-        assert before <= snapshot.timestamp <= after
-
-
-# ===========================================================================
 # Тесты _loop_positions
 # ===========================================================================
 
@@ -152,7 +84,6 @@ class TestLoopPositions:
 
     def setup_method(self):
         self.connector = FakeConnector()
-        self.connector.get_funding = AsyncMock(return_value=Decimal("0.0001"))
 
     async def test_loop_positions_calls_fetch_positions(self):
         pos = make_position(ticker="BTCUSDT")
@@ -169,28 +100,9 @@ class TestLoopPositions:
         await run_one_iteration(self.connector._loop_positions)
 
         assert "BTCUSDT" in self.connector.state.positions
-        # pos пересоздаётся через dataclasses.replace, поэтому identity не гарантирована
         stored = self.connector.state.positions["BTCUSDT"]
         assert stored.ticker == "BTCUSDT"
         assert stored.amount == pos.amount
-
-    async def test_loop_positions_calls_ensure_funding_for_new_ticker(self):
-        pos = make_position(ticker="BTCUSDT")
-        self.connector.fetch_positions = AsyncMock(return_value=[pos])
-
-        await run_one_iteration(self.connector._loop_positions)
-
-        self.connector.get_funding.assert_awaited_once_with("BTCUSDT")
-
-    async def test_loop_positions_does_not_call_ensure_funding_for_existing_ticker(self):
-        pos = make_position(ticker="BTCUSDT")
-        # Позиция уже есть в state
-        self.connector.state.positions["BTCUSDT"] = pos
-        self.connector.fetch_positions = AsyncMock(return_value=[pos])
-
-        await run_one_iteration(self.connector._loop_positions)
-
-        self.connector.get_funding.assert_not_awaited()
 
     async def test_loop_positions_removes_closed_positions(self):
         old_pos = make_position(ticker="ETHUSDT")
@@ -221,53 +133,6 @@ class TestLoopPositions:
         assert "BTCUSDT" in self.connector.state.positions
         assert "ETHUSDT" not in self.connector.state.positions
 
-    async def test_loop_positions_swallows_fetch_exception(self):
-        self.connector.fetch_positions = AsyncMock(side_effect=RuntimeError("API down"))
-
-        # Не должно бросать исключение наружу — цикл продолжится
-        await run_one_iteration(self.connector._loop_positions)
-
-        # state.positions остался пустым — ничего не сломалось
-        assert self.connector.state.positions == {}
-
-    async def test_loop_positions_new_ticker_funding_rate_set_from_state(self):
-        # get_funding вернёт реальную ставку — она должна оказаться в позиции
-        self.connector.get_funding = AsyncMock(return_value=Decimal("0.0005"))
-        pos = make_position(ticker="BTCUSDT")  # funding_rate=None, как в реальном коннекторе
-        self.connector.fetch_positions = AsyncMock(return_value=[pos])
-
-        await run_one_iteration(self.connector._loop_positions)
-
-        stored = self.connector.state.positions["BTCUSDT"]
-        assert stored.funding_rate == Decimal("0.0005")
-
-    async def test_loop_positions_existing_ticker_funding_rate_updated_from_state(self):
-        # Позиция уже в стейте, funding_rates тоже заполнен — ставка должна подтянуться
-        pos = make_position(ticker="BTCUSDT")  # funding_rate=None, как в реальном коннекторе
-        self.connector.state.positions["BTCUSDT"] = pos
-        snapshot = make_funding_snapshot(ticker="BTCUSDT", rate="0.0007")
-        self.connector.state.funding_rates["BTCUSDT"] = snapshot
-        self.connector.fetch_positions = AsyncMock(return_value=[pos])
-
-        await run_one_iteration(self.connector._loop_positions)
-
-        stored = self.connector.state.positions["BTCUSDT"]
-        assert stored.funding_rate == Decimal("0.0007")
-        # _ensure_funding не должен был вызываться — тикер уже был в positions
-        self.connector.get_funding.assert_not_awaited()
-
-    async def test_loop_positions_funding_rate_stays_zero_when_ensure_funding_fails(self):
-        # get_funding бросает исключение → _ensure_funding не заполняет funding_rates
-        # → ветка `if ticker in state.funding_rates` не выполняется
-        # → funding_rate остаётся None (значение из fetch_positions, как в bybit)
-        self.connector.get_funding = AsyncMock(side_effect=RuntimeError("network error"))
-        pos = make_position(ticker="BTCUSDT")  # funding_rate=None по умолчанию
-        self.connector.fetch_positions = AsyncMock(return_value=[pos])
-
-        await run_one_iteration(self.connector._loop_positions)
-
-        stored = self.connector.state.positions["BTCUSDT"]
-        assert stored.funding_rate is None
 
 
 # ===========================================================================
@@ -307,15 +172,6 @@ class TestLoopMargin:
 
         assert self.connector.state.maintenance_margin_update_time >= before
 
-    async def test_loop_margin_swallows_fetch_exception(self):
-        self.connector.fetch_margin = AsyncMock(side_effect=ValueError("bad response"))
-
-        # Не должно бросать исключение
-        await run_one_iteration(self.connector._loop_margin)
-
-        # Значения не изменились — остались дефолтными
-        assert self.connector.state.maintenance_margin == Decimal(0)
-        assert self.connector.state.current_margin == Decimal(0)
 
     @pytest.mark.parametrize("maint,current", [
         ("0", "0"),
@@ -333,95 +189,3 @@ class TestLoopMargin:
 
         assert self.connector.state.maintenance_margin == Decimal(maint)
         assert self.connector.state.current_margin == Decimal(current)
-
-
-# ===========================================================================
-# Тесты _loop_funding
-# ===========================================================================
-
-class TestLoopFunding:
-
-    def setup_method(self):
-        self.connector = FakeConnector()
-
-    async def test_loop_funding_calls_get_funding_for_each_open_position(self):
-        pos_btc = make_position(ticker="BTCUSDT")
-        pos_eth = make_position(ticker="ETHUSDT")
-        self.connector.state.positions = {"BTCUSDT": pos_btc, "ETHUSDT": pos_eth}
-        self.connector.get_funding = AsyncMock(return_value=Decimal("0.0001"))
-
-        await run_one_iteration(self.connector._loop_funding)
-
-        assert self.connector.get_funding.await_count == 2
-        called_tickers = {call.args[0] for call in self.connector.get_funding.await_args_list}
-        assert called_tickers == {"BTCUSDT", "ETHUSDT"}
-
-    async def test_loop_funding_does_not_call_get_funding_when_no_positions(self):
-        self.connector.state.positions = {}
-        self.connector.get_funding = AsyncMock(return_value=Decimal("0.0001"))
-
-        await run_one_iteration(self.connector._loop_funding)
-
-        self.connector.get_funding.assert_not_awaited()
-
-    async def test_loop_funding_updates_funding_rates(self):
-        pos = make_position(ticker="BTCUSDT")
-        self.connector.state.positions = {"BTCUSDT": pos}
-        self.connector.get_funding = AsyncMock(return_value=Decimal("0.0003"))
-
-        await run_one_iteration(self.connector._loop_funding)
-
-        assert "BTCUSDT" in self.connector.state.funding_rates
-        assert self.connector.state.funding_rates["BTCUSDT"].rate == Decimal("0.0003")
-
-    async def test_loop_funding_appends_snapshot_to_history(self):
-        pos = make_position(ticker="BTCUSDT")
-        self.connector.state.positions = {"BTCUSDT": pos}
-        self.connector.get_funding = AsyncMock(return_value=Decimal("0.0003"))
-
-        await run_one_iteration(self.connector._loop_funding)
-
-        history = self.connector.state.funding_rates_history.get("BTCUSDT", [])
-        assert len(history) == 1
-        assert history[0].rate == Decimal("0.0003")
-
-    async def test_loop_funding_accumulates_history_across_iterations(self):
-        pos = make_position(ticker="BTCUSDT")
-        self.connector.state.positions = {"BTCUSDT": pos}
-        # Первый вызов
-        self.connector.get_funding = AsyncMock(return_value=Decimal("0.0001"))
-        await run_one_iteration(self.connector._loop_funding)
-        # Второй вызов с другой ставкой
-        self.connector.get_funding = AsyncMock(return_value=Decimal("0.0002"))
-        await run_one_iteration(self.connector._loop_funding)
-
-        history = self.connector.state.funding_rates_history["BTCUSDT"]
-        assert len(history) == 2
-        assert history[0].rate == Decimal("0.0001")
-        assert history[1].rate == Decimal("0.0002")
-
-    async def test_loop_funding_updates_funding_rates_update_time(self):
-        self.connector.state.positions = {}
-        before = datetime.now(tz=timezone.utc)
-
-        await run_one_iteration(self.connector._loop_funding)
-
-        assert self.connector.state.funding_rates_update_time >= before
-
-    async def test_loop_funding_skips_failed_ticker_and_continues(self):
-        pos_btc = make_position(ticker="BTCUSDT")
-        pos_eth = make_position(ticker="ETHUSDT")
-        self.connector.state.positions = {"BTCUSDT": pos_btc, "ETHUSDT": pos_eth}
-
-        async def selective_funding(ticker: str) -> Decimal:
-            if ticker == "BTCUSDT":
-                raise RuntimeError("rate limit")
-            return Decimal("0.0001")
-
-        self.connector.get_funding = AsyncMock(side_effect=selective_funding)
-
-        await run_one_iteration(self.connector._loop_funding)
-
-        # ETHUSDT обновился, BTCUSDT — нет
-        assert "ETHUSDT" in self.connector.state.funding_rates
-        assert "BTCUSDT" not in self.connector.state.funding_rates

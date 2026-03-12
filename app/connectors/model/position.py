@@ -16,7 +16,6 @@ class Position:
     amount: Decimal
     avg_price: Decimal
     current_price: Decimal
-    funding_rate: Decimal | None
     update_time: datetime = field(default_factory=_utcnow)
 
     def __post_init__(self) -> None:

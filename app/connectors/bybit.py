@@ -65,7 +65,6 @@ class BybitConnector(BaseExchangeConnector):
                 amount=size,
                 avg_price=Decimal(item["avgPrice"]),
                 current_price=Decimal(item["markPrice"]),
-                funding_rate=None,
             ))
         return positions
 
@@ -80,11 +79,3 @@ class BybitConnector(BaseExchangeConnector):
         current_margin = Decimal(account["totalMarginBalance"])
         return maintenance_margin, current_margin
 
-    async def get_funding(self, ticker: str) -> Decimal:
-        resp = await self._client.get(
-            f"/v5/market/tickers?category=linear&symbol={ticker}"
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        item = data["result"]["list"][0]
-        return Decimal(item["fundingRate"])

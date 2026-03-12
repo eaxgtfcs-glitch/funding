@@ -153,7 +153,6 @@ class MonitoringEngine:
                 checks = [
                     ("positions", state.positions_update_time, cfg.positions_interval),
                     ("maintenance_margin", state.maintenance_margin_update_time, cfg.margin_interval),
-                    ("funding_rates", state.funding_rates_update_time, cfg.funding_interval),
                 ]
                 for field_name, last_update, interval in checks:
                     threshold = interval * 2.5

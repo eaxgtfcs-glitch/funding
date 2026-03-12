@@ -24,24 +24,16 @@ def _make_state(name: str = "TestExchange", positions: dict | None = None,
                 maintenance: str = "1000", current: str = "3500",
                 ratio: str | None = "28.57"):
     from app.connectors.model.state import ExchangeState
-    from app.connectors.model.funding import FundingSnapshot
 
     now = datetime.now(tz=timezone.utc)
     pos_dict = positions or {}
-    funding = {
-        t: FundingSnapshot(ticker=t, rate=Decimal("0.0001"), timestamp=now)
-        for t in pos_dict
-    }
     return ExchangeState(
         name=name,
         positions=pos_dict,
-        funding_rates=funding,
-        funding_rates_history={},
         maintenance_margin=Decimal(maintenance),
         current_margin=Decimal(current),
         positions_update_time=now,
         maintenance_margin_update_time=now,
-        funding_rates_update_time=now,
         margin_ratio=Decimal(ratio) if ratio is not None else None,
     )
 
@@ -56,8 +48,7 @@ def _make_position(ticker: str = "BTCUSDT", direction: str = "long",
         direction=direction,
         amount=Decimal(amount),
         avg_price=Decimal(avg_price),
-        current_price=Decimal(current_price),
-        funding_rate=Decimal("0.0001"),
+        current_price=Decimal(current_price)
     )
 
 
@@ -69,7 +60,6 @@ class TestModuleImports:
 
     def test_import_connectors_model(self):
         importlib.import_module("app.connectors.model.position")
-        importlib.import_module("app.connectors.model.funding")
         importlib.import_module("app.connectors.model.state")
 
     def test_import_connectors_config(self):
@@ -198,9 +188,8 @@ class TestFormatters:
     def test_format_stale_data_alert(self):
         now = datetime.now(tz=timezone.utc)
         last = datetime(2026, 3, 11, 10, 0, 0, tzinfo=timezone.utc)
-        result = self.fmt.format_stale_data_alert("Binance", "funding_rates", last, now)
+        result = self.fmt.format_stale_data_alert("Binance", "positions", last, now)
         assert "Binance" in result
-        assert "funding_rates" in result
         assert "STALE DATA" in result
 
     # --- format_position_reduction_batch ---
@@ -266,12 +255,6 @@ class TestFormatters:
         result = self.fmt.format_exchange_state(state)
         # при short + цена выросла: должен быть минусовой PnL
         assert "-" in result
-
-    def test_format_exchange_state_funding_section(self):
-        pos = _make_position("ETHUSDT")
-        state = _make_state(positions={"ETHUSDT": pos})
-        result = self.fmt.format_exchange_state(state)
-        assert "Funding" in result
 
     def test_format_exchange_state_updated_line(self):
         state = _make_state()
