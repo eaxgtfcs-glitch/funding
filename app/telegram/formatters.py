@@ -5,7 +5,7 @@ from decimal import Decimal
 from app.connectors.config import get_notify_tz
 from app.connectors.model.position import Position
 from app.connectors.model.state import ExchangeState
-from app.engine.model.pair import Pair
+from app.engine.model.structure import Structure
 
 
 def _to_notify_tz(dt: datetime) -> datetime:
@@ -143,23 +143,33 @@ def format_position_reduction_batch(reductions: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def format_pair_imbalance_batch(reductions: list[dict]) -> str:
-    lines = [f"<b>PAIR IMBALANCED</b> ({len(reductions)} event(s))"]
-    for r in reductions:
-        lines.append("")
-        lines.append(f"<b>{r['exchange_name']}</b>  <code>{r['ticker']}</code>")
-        amount_line = f"  Amount: <code>{r['old_amount']}</code> → <code>{r['new_amount']}</code>"
-        if r["new_amount"] == Decimal(0):
-            amount_line += "  <b>Fully closed</b>"
-        lines.append(amount_line)
-        counterpart = r.get("counterpart")
-        if counterpart:
-            lines.append("  ⚠️ Counterpart still open:")
-            lines.append(
-                f"    {counterpart.exchange_name}  {counterpart.ticker}"
-                f"  {counterpart.direction}  {counterpart.amount}"
-            )
-    return "\n".join(lines)
+def format_auto_close_success(
+        trigger_exchange: str,
+        trigger_ticker: str,
+        close_exchange: str,
+        close_ticker: str,
+        close_amount: Decimal,
+) -> str:
+    return (
+        f"<b>AUTO CLOSE OK</b>\n"
+        f"Trigger: <b>{trigger_exchange}</b>  <code>{trigger_ticker}</code> reduced\n"
+        f"Closed:  <b>{close_exchange}</b>  <code>{close_ticker}</code>  qty <code>{close_amount}</code>"
+    )
+
+
+def format_auto_close_failed(
+        trigger_exchange: str,
+        trigger_ticker: str,
+        close_exchange: str,
+        close_ticker: str,
+        close_amount: Decimal,
+) -> str:
+    return (
+        f"<b>AUTO CLOSE FAILED</b>\n"
+        f"Trigger: <b>{trigger_exchange}</b>  <code>{trigger_ticker}</code> reduced\n"
+        f"Failed to close: <b>{close_exchange}</b>  <code>{close_ticker}</code>  qty <code>{close_amount}</code>\n"
+        f"Manual intervention required."
+    )
 
 
 def format_session_start_separator() -> str:
@@ -220,24 +230,65 @@ def format_exchange_state(state: ExchangeState) -> str:
     return "\n".join(lines)
 
 
-def format_pairs_state(pairs: list[Pair], states: dict[str, ExchangeState]) -> str:
+def format_leg_not_found(exchange: str, ticker: str) -> str:
+    return (
+        f"<b>STRUCTURE LEG NOT FOUND</b> — {exchange}\n"
+        f"Ticker {ticker} not found in open positions.\n"
+        f"Structure will treat this leg as amount=0."
+    )
+
+
+def format_structure_imbalance(
+        trigger_exchange: str,
+        trigger_ticker: str,
+        old_amount: Decimal,
+        new_amount: Decimal,
+        closed_legs: list[dict],
+        event_count: int = 1,
+) -> str:
+    lines = [f"<b>STRUCTURE IMBALANCED</b> ({event_count} event(s))"]
+    lines.append("")
+    lines.append(f"Trigger: <b>{trigger_exchange}</b>  <code>{trigger_ticker}</code>")
+    amount_line = f"  Amount: <code>{old_amount}</code> → <code>{new_amount}</code>"
+    if new_amount == Decimal(0):
+        amount_line += "  <b>Fully closed</b>"
+    lines.append(amount_line)
+    if closed_legs:
+        lines.append("")
+        lines.append("Auto-closed:")
+        for leg in closed_legs:
+            lines.append(
+                f"  <b>{leg['exchange']}</b>  <code>{leg['ticker']}</code>"
+                f"  qty <code>{leg['amount']}</code>"
+            )
+    return "\n".join(lines)
+
+
+def format_structures_state(structures: list[Structure], states: dict[str, ExchangeState]) -> str:
     now_local = _to_notify_tz(datetime.now(tz=_tz.utc))
     tz_label = now_local.strftime("%Z") or now_local.strftime("%z")
-    lines = [f"<b>PAIRS  |  {len(pairs)} active</b>"]
-    if not pairs:
+    active = [s for s in structures if s.is_active]
+    lines = [f"<b>STRUCTURES  |  {len(active)} active</b>"]
+    if not active:
         lines.append("")
-        lines.append("No active pairs")
+        lines.append("No active structures")
     else:
         lines.append("")
-        for pair in pairs:
-            pa = pair.position_a
-            pb = pair.position_b
-            emoji_a = "🟢" if pa.direction == "long" else "🔴"
-            emoji_b = "🟢" if pb.direction == "long" else "🔴"
-            ticker = pa.ticker if pa.ticker == pb.ticker else f"{pa.ticker}/{pb.ticker}"
+        for structure in active:
+            leg_parts = []
+            amounts = []
+            tickers: set[str] = set()
+            for leg in structure.legs:
+                state = states.get(leg.exchange)
+                pos = state.positions.get(leg.ticker) if state else None
+                real_amount = pos.amount * leg.multiplier if pos else Decimal(0)
+                emoji = "🟢" if (pos and pos.direction == "long") else "🔴"
+                leg_parts.append(f"{emoji}{leg.exchange}")
+                amounts.append(str(real_amount))
+                tickers.add(leg.ticker)
+            ticker_label = tickers.pop() if len(tickers) == 1 else "/".join(sorted(tickers))
             lines.append(
-                f" {ticker}  {emoji_a}{pa.exchange_name} {emoji_b}{pb.exchange_name}"
-                f" ({pa.amount}/{pb.amount})"
+                f"  {ticker_label}  {' '.join(leg_parts)}  ({'/'.join(amounts)})"
             )
     lines.append("")
     lines.append(f"Updated: {now_local.strftime('%H:%M:%S')} {tz_label}")

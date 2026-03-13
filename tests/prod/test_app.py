@@ -78,7 +78,7 @@ class TestModuleImports:
         importlib.import_module("app.telegram.state_broadcaster")
 
     def test_import_engine_model(self):
-        importlib.import_module("app.engine.model.pair")
+        importlib.import_module("app.engine.model.structure")
 
     def test_import_engine_engine(self):
         # engine.py импортируется без инстанциирования — проверяем только синтаксис
@@ -237,7 +237,7 @@ class TestFormatters:
     def test_format_exchange_state_no_positions(self):
         state = _make_state(name="Bybit", positions={})
         result = self.fmt.format_exchange_state(state)
-        assert "BYBIT" in result
+        assert "Bybit" in result
         assert "No open positions" in result
         assert "Margin" in result
 
@@ -246,7 +246,8 @@ class TestFormatters:
         state = _make_state(name="Bybit", positions={"BTCUSDT": pos})
         result = self.fmt.format_exchange_state(state)
         assert "BTCUSDT" in result
-        assert "LONG" in result
+        # direction отображается через emoji (🟢/🔴), а не текстом LONG/SHORT
+        assert "🟢" in result
 
     def test_format_exchange_state_short_position_pnl_sign(self):
         """Для шорта при росте цены PnL отрицательный."""

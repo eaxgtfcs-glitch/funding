@@ -43,6 +43,10 @@ class BaseExchangeConnector(ABC):
     async def fetch_margin(self) -> tuple[Decimal, Decimal]:
         """Return from the exchange maintenance_margin and current_margin."""
 
+    @abstractmethod
+    async def close_position(self, ticker: str, amount: Decimal) -> None:
+        ...
+
     async def start(self) -> None:
         self._tasks = [
             asyncio.create_task(self._loop_positions()),

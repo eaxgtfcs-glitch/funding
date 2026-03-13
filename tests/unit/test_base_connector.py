@@ -39,6 +39,9 @@ class FakeConnector(BaseExchangeConnector):
     async def fetch_margin(self) -> tuple[Decimal, Decimal]:
         raise NotImplementedError  # будет замокан в тестах
 
+    async def close_position(self, ticker: str, amount: Decimal) -> None:
+        raise NotImplementedError  # будет замокан в тестах при необходимости
+
 
 # ---------------------------------------------------------------------------
 # Вспомогательная функция для одной итерации цикла

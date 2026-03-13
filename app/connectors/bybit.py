@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import hmac
+import json as _json
 import os
 import time
 from decimal import Decimal
@@ -67,6 +68,43 @@ class BybitConnector(BaseExchangeConnector):
                 current_price=Decimal(item["markPrice"]),
             ))
         return positions
+
+    def _sign_body(self, body: dict) -> dict:
+        """Формирует заголовки с HMAC-SHA256 подписью для POST-запросов Bybit v5 (JSON body)."""
+        timestamp = str(int(time.time() * 1000))
+        body_str = _json.dumps(body, separators=(",", ":"))
+        payload = timestamp + self._api_key + _RECV_WINDOW + body_str
+        signature = hmac.new(
+            self._api_secret.encode(),
+            payload.encode(),
+            hashlib.sha256,
+        ).hexdigest()
+        return {
+            "X-BAPI-API-KEY": self._api_key,
+            "X-BAPI-TIMESTAMP": timestamp,
+            "X-BAPI-RECV-WINDOW": _RECV_WINDOW,
+            "X-BAPI-SIGN": signature,
+            "Content-Type": "application/json",
+        }
+
+    async def close_position(self, ticker: str, amount: Decimal) -> None:
+        pos = self.state.positions.get(ticker)
+        side = "Sell" if (pos and pos.direction == "long") else "Buy"
+        body = {
+            "category": "linear",
+            "symbol": ticker,
+            "side": side,
+            "orderType": "Market",
+            "qty": str(amount),
+            "reduceOnly": True,
+        }
+        headers = self._sign_body(body)
+        resp = await self._client.post("/v5/order/create", headers=headers,
+                                       content=_json.dumps(body, separators=(",", ":")))
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("retCode") != 0:
+            raise RuntimeError(f"Bybit close_position error: {data.get('retMsg')} (retCode={data.get('retCode')})")
 
     async def fetch_margin(self) -> tuple[Decimal, Decimal]:
         query = "accountType=UNIFIED"

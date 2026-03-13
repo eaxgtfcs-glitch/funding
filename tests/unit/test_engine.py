@@ -38,6 +38,9 @@ class StubConnector(BaseExchangeConnector):
     async def fetch_margin(self) -> tuple[Decimal, Decimal]:
         return Decimal(0), Decimal(0)
 
+    async def close_position(self, ticker: str, amount: Decimal) -> None:
+        pass
+
 
 class AnotherStubConnector(BaseExchangeConnector):
     """Второй дубль для проверки работы с несколькими коннекторами."""
@@ -53,6 +56,9 @@ class AnotherStubConnector(BaseExchangeConnector):
 
     async def fetch_margin(self) -> tuple[Decimal, Decimal]:
         return Decimal(0), Decimal(0)
+
+    async def close_position(self, ticker: str, amount: Decimal) -> None:
+        pass
 
 
 # ---------------------------------------------------------------------------

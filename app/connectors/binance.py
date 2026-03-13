@@ -53,6 +53,20 @@ class BinanceConnector(BaseExchangeConnector):
             ))
         return positions
 
+    async def close_position(self, ticker: str, amount: Decimal) -> None:
+        pos = self.state.positions.get(ticker)
+        side = "SELL" if (pos and pos.direction == "long") else "BUY"
+        params = {
+            "symbol": ticker,
+            "side": side,
+            "type": "MARKET",
+            "quantity": str(amount),
+            "reduceOnly": "true",
+        }
+        query = self._sign(params)
+        resp = await self._client.post(f"/fapi/v1/order?{query}")
+        resp.raise_for_status()
+
     async def fetch_margin(self) -> tuple[Decimal, Decimal]:
         query = self._sign({})
         resp = await self._client.get(f"/fapi/v2/account?{query}")

@@ -14,14 +14,17 @@ from app.connectors.base import BaseExchangeConnector
 from app.connectors.config import (
     CRITICAL_ALERT_SEND_COUNT,
     CRITICAL_ALERT_REPEAT_INTERVAL,
+    READ_ONLY_MODE,
 )
-from app.connectors.model.position import Position
 from app.connectors.model.state import ExchangeState
-from app.engine.model.pair import Pair
+from app.engine.model.structure import Structure, StructureLeg
 from app.telegram.formatters import (
+    format_auto_close_failed,
+    format_auto_close_success,
     format_high_margin_ratio_alert,
-    format_pair_imbalance_batch,
-    format_pairs_state,
+    format_leg_not_found,
+    format_structure_imbalance,
+    format_structures_state,
     format_position_reduction_batch,
     format_session_start_separator,
     format_stale_data_alert,
@@ -32,7 +35,7 @@ from app.telegram.state_broadcaster import StateBroadcaster
 logger = logging.getLogger(__name__)
 
 _MARGIN_RATIO_ALERT_THRESHOLD = Decimal("50")
-_PAIRS_FILE = Path("data/pairs.json")
+_STRUCTURES_FILE = Path("data/structures.json")
 _ALERT_MESSAGES_FILE = Path("data/.alert_messages.json")
 
 
@@ -67,17 +70,15 @@ class MonitoringEngine:
     def __init__(self) -> None:
         self._connectors: list[BaseExchangeConnector] = []
         self.states: dict[str, ExchangeState] = {}
-        self._pairs: list[Pair] = []
+        self._structures: list[Structure] = []
         self._telegram: TelegramAlertService | None = None
         self._broadcaster: StateBroadcaster | None = None
         # Предыдущие значения amounts позиций для детектирования сокращений
         self._prev_amounts: dict[str, dict[str, Decimal]] = {}
         # Флаги "алерт уже отправлен" для margin_ratio, чтобы не спамить
         self._margin_ratio_alerted: dict[str, bool] = {}
-        # Флаги "алерт уже отправлен" для пар, чтобы не спамить
-        self._pairs_reduction_alerted: dict[tuple[str, str], bool] = {}
-        # Ключи пар, для которых уже отправлен алерт о неизвестном коннекторе
-        self._pairs_config_error_alerted: set[str] = set()
+        # Ключи структур, для которых уже отправлен алерт о ненайденной ноге
+        self._leg_not_found_alerted: set[str] = set()
         # Задачи фоновых циклов движка
         self._engine_tasks: list[asyncio.Task] = []
         self._pending_tasks: set[asyncio.Task] = set()
@@ -127,7 +128,7 @@ class MonitoringEngine:
             states=self.states,
             chat_ids=chat_ids,
             update_interval=update_interval,
-            pairs_state_fn=lambda: format_pairs_state(self._pairs, self.states),
+            pairs_state_fn=lambda: format_structures_state(self._structures, self.states),
         )
 
     def _critical_chat_ids(self) -> list[str]:
@@ -145,11 +146,17 @@ class MonitoringEngine:
                 return c.config
         return None
 
-    def _get_counterpart(self, exchange_name: str, ticker: str):
-        for pair in self._pairs:
-            cp = pair.get_counterpart(exchange_name, ticker)
-            if cp is not None:
-                return cp
+    def _get_structure(self, exchange_name: str, ticker: str) -> Structure | None:
+        for s in self._structures:
+            for leg in s.legs:
+                if leg.exchange == exchange_name and leg.ticker == ticker:
+                    return s
+        return None
+
+    def _get_connector(self, exchange_name: str) -> BaseExchangeConnector | None:
+        for c in self._connectors:
+            if c.name == exchange_name:
+                return c
         return None
 
     # -------------------------------------------------------------------------
@@ -237,162 +244,74 @@ class MonitoringEngine:
             if message_id is not None:
                 _add_alert_message_id(chat_id, message_id)
 
-    async def _send_pairs_alert(self, reductions: list[dict]) -> None:
+    async def _send_structure_alert(self, msg: str) -> None:
         if not self._telegram:
             return
         pairs_ids = self._pairs_alert_chat_ids()
         if not pairs_ids:
             return
-        msg = format_pair_imbalance_batch(reductions)
         for chat_id in pairs_ids:
             message_id = await self._telegram.send_alert_tracked(chat_id, msg)
             if message_id is not None:
                 _add_alert_message_id(chat_id, message_id)
 
-    def _load_pairs_from_file(self) -> tuple[list[Pair], list[dict]]:
+    def _load_structures_from_file(self) -> list[Structure]:
         try:
-            with open(_PAIRS_FILE, encoding="utf-8") as f:
+            with open(_STRUCTURES_FILE, encoding="utf-8") as f:
                 raw_list = json.load(f)
             if not isinstance(raw_list, list):
-                return [], []
+                return []
         except Exception:
-            return [], []
+            return []
 
-        pairs: list[Pair] = []
-        active_raw: list[dict] = []
+        structures: list[Structure] = []
         for entry in raw_list:
-            if not entry.get("is_active", False):
+            is_active = entry.get("is_active", False)
+            raw_legs = entry.get("legs", [])
+            legs: list[StructureLeg] = []
+            for raw_leg in raw_legs:
+                exchange = raw_leg["exchange"]
+                ticker = raw_leg["ticker"]
+                multiplier = Decimal(str(raw_leg.get("multiplier", 1)))
+                legs.append(StructureLeg(exchange=exchange, ticker=ticker, multiplier=multiplier))
+            structures.append(Structure(legs=legs, is_active=is_active))
+        return structures
+
+    def _check_leg_not_found_alerts(self, structures: list[Structure]) -> None:
+        """Отправляет алерт если нога Structure не найдена в позициях (один раз)."""
+        for structure in structures:
+            if not structure.is_active:
                 continue
-            exchange_a = entry["exchange_a"]
-            ticker_a = entry["ticker_a"]
-            exchange_b = entry["exchange_b"]
-            ticker_b = entry["ticker_b"]
-            size_a = Decimal(str(entry["size_a"]))
-            size_b = Decimal(str(entry["size_b"]))
+            for leg in structure.legs:
+                alert_key = f"{leg.exchange}/{leg.ticker}"
+                state = self.states.get(leg.exchange)
+                if state is None:
+                    continue
+                if leg.ticker not in state.positions:
+                    if alert_key not in self._leg_not_found_alerted:
+                        msg = format_leg_not_found(leg.exchange, leg.ticker)
+                        task = asyncio.create_task(
+                            self._send_structure_alert(msg)
+                        )
+                        self._pending_tasks.add(task)
+                        task.add_done_callback(self._pending_tasks.discard)
+                        self._leg_not_found_alerted.add(alert_key)
+                else:
+                    self._leg_not_found_alerted.discard(alert_key)
 
-            pair_key = f"{exchange_a}/{ticker_a}—{exchange_b}/{ticker_b}"
-            if exchange_a not in self.states or exchange_b not in self.states:
-                missing = [e for e in (exchange_a, exchange_b) if e not in self.states]
-                if pair_key not in self._pairs_config_error_alerted:
-                    msg = f"<b>PAIR CONFIG ERROR</b>\nUnknown connector(s): {', '.join(missing)}\nPair {exchange_a}/{ticker_a} — {exchange_b}/{ticker_b} skipped."
-                    task = asyncio.create_task(self._send_critical_alert(msg))
-                    self._pending_tasks.add(task)
-                    task.add_done_callback(self._pending_tasks.discard)
-                    self._pairs_config_error_alerted.add(pair_key)
-                continue
-            else:
-                self._pairs_config_error_alerted.discard(pair_key)
-
-            state_a = self.states.get(exchange_a)
-            pos_a = state_a.positions.get(ticker_a) if state_a else None
-            if pos_a is None:
-                pos_a = Position(
-                    ticker=ticker_a,
-                    exchange_name=exchange_a,
-                    direction="long",
-                    amount=Decimal(0),
-                    avg_price=Decimal(0),
-                    current_price=Decimal(0),
-                )
-
-            state_b = self.states.get(exchange_b)
-            pos_b = state_b.positions.get(ticker_b) if state_b else None
-            if pos_b is None:
-                pos_b = Position(
-                    ticker=ticker_b,
-                    exchange_name=exchange_b,
-                    direction="short",
-                    amount=Decimal(0),
-                    avg_price=Decimal(0),
-                    current_price=Decimal(0),
-                )
-
-            pairs.append(Pair(position_a=pos_a, position_b=pos_b, is_active=True))
-            active_raw.append({
-                "exchange_a": exchange_a,
-                "ticker_a": ticker_a,
-                "size_a": size_a,
-                "exchange_b": exchange_b,
-                "ticker_b": ticker_b,
-                "size_b": size_b,
-            })
-        return pairs, active_raw
-
-    def _check_pairs_reductions(self, active_raw: list[dict]) -> None:
-        reductions: list[dict] = []
-        # collect keys seen in this run to reset cleared conditions
-        seen_keys: set[tuple[str, str]] = set()
-
-        for entry in active_raw:
-            exchange_a, ticker_a = entry["exchange_a"], entry["ticker_a"]
-            exchange_b, ticker_b = entry["exchange_b"], entry["ticker_b"]
-            size_a, size_b = entry["size_a"], entry["size_b"]
-
-            key_a = (exchange_a, ticker_a)
-            key_b = (exchange_b, ticker_b)
-            seen_keys.add(key_a)
-            seen_keys.add(key_b)
-
-            # leg A
-            state_a = self.states.get(exchange_a)
-            real_pos_a = state_a.positions.get(ticker_a) if state_a else None
-            real_amount_a = real_pos_a.amount if real_pos_a else Decimal(0)
-            if real_amount_a < size_a * Decimal("0.995"):
-                if not self._pairs_reduction_alerted.get(key_a):
-                    state_b = self.states.get(exchange_b)
-                    counterpart_b = state_b.positions.get(ticker_b) if state_b else None
-                    reductions.append({
-                        "exchange_name": exchange_a,
-                        "ticker": ticker_a,
-                        "old_amount": size_a,
-                        "new_amount": real_amount_a,
-                        "counterpart": counterpart_b,
-                    })
-                    self._pairs_reduction_alerted[key_a] = True
-            else:
-                self._pairs_reduction_alerted[key_a] = False
-
-            # leg B
-            state_b = self.states.get(exchange_b)
-            real_pos_b = state_b.positions.get(ticker_b) if state_b else None
-            real_amount_b = real_pos_b.amount if real_pos_b else Decimal(0)
-            if real_amount_b < size_b * Decimal("0.995"):
-                if not self._pairs_reduction_alerted.get(key_b):
-                    state_a = self.states.get(exchange_a)
-                    counterpart_a = state_a.positions.get(ticker_a) if state_a else None
-                    reductions.append({
-                        "exchange_name": exchange_b,
-                        "ticker": ticker_b,
-                        "old_amount": size_b,
-                        "new_amount": real_amount_b,
-                        "counterpart": counterpart_a,
-                    })
-                    self._pairs_reduction_alerted[key_b] = True
-            else:
-                self._pairs_reduction_alerted[key_b] = False
-
-        # clear alerted state for legs no longer in active pairs
-        stale_keys = set(self._pairs_reduction_alerted.keys()) - seen_keys
-        for k in stale_keys:
-            del self._pairs_reduction_alerted[k]
-
-        if reductions:
-            task = asyncio.create_task(self._send_pairs_alert(reductions))
-            self._pending_tasks.add(task)
-            task.add_done_callback(self._pending_tasks.discard)
-
-    async def _loop_pairs_reload(self) -> None:
+    async def _loop_structures_reload(self) -> None:
         while True:
             await asyncio.sleep(15)
-            pairs, active_raw = self._load_pairs_from_file()
-            self._pairs = pairs
-            self._check_pairs_reductions(active_raw)
+            structures = self._load_structures_from_file()
+            self._structures = structures
+            self._check_leg_not_found_alerts(structures)
 
     async def _on_positions_updated(self, connector: BaseExchangeConnector) -> None:
         """Вызывается немедленно после получения свежих позиций."""
         name = connector.name
         current_positions = connector.state.positions
-        prev = self._prev_amounts[name]
+        prev_snapshot = dict(self._prev_amounts)
+        prev = prev_snapshot[name]
 
         reductions: list[dict] = []
         for ticker, prev_amount in list(prev.items()):
@@ -417,21 +336,202 @@ class MonitoringEngine:
             self._pending_tasks.add(task)
             task.add_done_callback(self._pending_tasks.discard)
 
-        pairs_reductions: list[dict] = []
         for r in reductions:
-            cp = self._get_counterpart(r["exchange_name"], r["ticker"])
-            if cp is not None:
-                pairs_reductions.append({
-                    "exchange_name": r["exchange_name"],
-                    "ticker": r["ticker"],
-                    "old_amount": r["old_amount"],
-                    "new_amount": r["new_amount"],
-                    "counterpart": cp,
-                })
-        if pairs_reductions:
-            task = asyncio.create_task(self._send_pairs_alert(pairs_reductions))
+            structure = self._get_structure(r["exchange_name"], r["ticker"])
+            if structure is None:
+                continue
+            task = asyncio.create_task(
+                self._handle_structure_reduction(structure, r, prev_snapshot)
+            )
             self._pending_tasks.add(task)
             task.add_done_callback(self._pending_tasks.discard)
+
+    async def _handle_structure_reduction(
+            self,
+            structure: Structure,
+            reduction: dict,
+            prev_amounts: dict[str, dict[str, Decimal]],
+    ) -> None:
+        trigger_exchange = reduction["exchange_name"]
+        trigger_ticker = reduction["ticker"]
+        old_amount = reduction["old_amount"]
+        new_amount = reduction["new_amount"]
+
+        # Найти ногу-триггер
+        trigger_leg: StructureLeg | None = None
+        for leg in structure.legs:
+            if leg.exchange == trigger_exchange and leg.ticker == trigger_ticker:
+                trigger_leg = leg
+                break
+        if trigger_leg is None:
+            return
+
+        prev_real_x = old_amount * trigger_leg.multiplier
+        new_real_x = new_amount * trigger_leg.multiplier
+        delta_real = prev_real_x - new_real_x
+        if delta_real <= 0:
+            return
+
+        # Определяем сторону триггера — по предыдущему направлению позиции
+        trigger_state = self.states.get(trigger_exchange)
+        trigger_pos = trigger_state.positions.get(trigger_ticker) if trigger_state else None
+        # direction берём из текущей позиции (может не быть если закрыта полностью)
+        # используем prev_amounts: нет направления в prev_amounts — берём из текущей позиции
+        trigger_direction: str | None = trigger_pos.direction if trigger_pos else None
+
+        # Суммируем real_amount всех ног той же стороны (по prev_amounts)
+        same_side_legs: list[StructureLeg] = []
+        opposite_side_legs: list[StructureLeg] = []
+
+        for leg in structure.legs:
+            state = self.states.get(leg.exchange)
+            pos = state.positions.get(leg.ticker) if state else None
+            if pos is None:
+                # если позиция закрыта — используем prev_amounts
+                prev_amt = prev_amounts.get(leg.exchange, {}).get(leg.ticker, Decimal(0))
+                # нет направления, пропускаем при сортировке по стороне
+                # относим к same_side если это сам триггер
+                if leg.exchange == trigger_exchange and leg.ticker == trigger_ticker:
+                    same_side_legs.append(leg)
+                continue
+            if trigger_direction is None:
+                # direction триггера неизвестно — ничего не делаем
+                continue
+            if pos.direction == trigger_direction:
+                same_side_legs.append(leg)
+            else:
+                opposite_side_legs.append(leg)
+
+        # Если trigger_direction неизвестен (позиция полностью закрыта),
+        # и нога не попала в same_side_legs — добавляем вручную чтобы рассчитать долю
+        if trigger_direction is None:
+            # Не можем определить стороны — просто шлём алерт без автозакрытия
+            msg = format_structure_imbalance(
+                trigger_exchange, trigger_ticker, old_amount, new_amount,
+                closed_legs=[],
+            )
+            await self._send_structure_alert(msg)
+            return
+
+        # total_real той же стороны (по prev_amounts)
+        total_real_side_x = Decimal(0)
+        for leg in same_side_legs:
+            prev_amt = prev_amounts.get(leg.exchange, {}).get(leg.ticker, Decimal(0))
+            total_real_side_x += prev_amt * leg.multiplier
+
+        if total_real_side_x == 0:
+            share = Decimal(1)
+        else:
+            share = delta_real / total_real_side_x
+
+        # Рассчитываем close_amount для каждой ноги противоположной стороны
+        close_legs: list[dict] = []
+        for leg in opposite_side_legs:
+            state = self.states.get(leg.exchange)
+            pos = state.positions.get(leg.ticker) if state else None
+            real_amount_y = pos.amount * leg.multiplier if pos else Decimal(0)
+            if real_amount_y <= 0:
+                continue
+            close_real_y = real_amount_y * share
+            close_exchange_y = close_real_y / leg.multiplier
+            close_legs.append({
+                "leg": leg,
+                "close_exchange_units": close_exchange_y,
+                "amount_before": pos.amount if pos else Decimal(0),
+            })
+
+        # Отправляем алерт об имбалансе
+        closed_leg_info = [
+            {"exchange": cl["leg"].exchange, "ticker": cl["leg"].ticker, "amount": cl["close_exchange_units"]}
+            for cl in close_legs
+        ]
+        msg = format_structure_imbalance(
+            trigger_exchange, trigger_ticker, old_amount, new_amount,
+            closed_legs=closed_leg_info,
+        )
+        await self._send_structure_alert(msg)
+
+        if READ_ONLY_MODE or not close_legs:
+            return
+
+        # Параллельное автозакрытие всех ног противоположной стороны
+        await asyncio.gather(
+            *(
+                self._auto_close_structure_leg(
+                    trigger_exchange=trigger_exchange,
+                    trigger_ticker=trigger_ticker,
+                    leg=cl["leg"],
+                    close_exchange_units=cl["close_exchange_units"],
+                    amount_before=cl["amount_before"],
+                )
+                for cl in close_legs
+            ),
+            return_exceptions=True,
+        )
+
+    async def _auto_close_structure_leg(
+            self,
+            trigger_exchange: str,
+            trigger_ticker: str,
+            leg: StructureLeg,
+            close_exchange_units: Decimal,
+            amount_before: Decimal,
+    ) -> None:
+        connector = self._get_connector(leg.exchange)
+        if connector is None:
+            return
+
+        success_threshold = (amount_before - close_exchange_units) / Decimal("0.995")
+
+        async def _attempt() -> bool:
+            try:
+                await connector.close_position(leg.ticker, close_exchange_units)
+            except Exception:
+                logger.exception(
+                    "close_position failed: %s %s qty=%s",
+                    connector.name, leg.ticker, close_exchange_units,
+                )
+                return False
+            positions_after = await connector.fetch_positions()
+            pos_after = next((p for p in positions_after if p.ticker == leg.ticker), None)
+            amount_after = pos_after.amount if pos_after else Decimal(0)
+            return amount_after <= success_threshold
+
+        confirmed = await _attempt()
+        if confirmed:
+            msg = format_auto_close_success(
+                trigger_exchange, trigger_ticker,
+                connector.name, leg.ticker, close_exchange_units,
+            )
+            await self._send_reduction_alert_raw(msg)
+            return
+
+        confirmed = await _attempt()
+        if confirmed:
+            msg = format_auto_close_success(
+                trigger_exchange, trigger_ticker,
+                connector.name, leg.ticker, close_exchange_units,
+            )
+            await self._send_reduction_alert_raw(msg)
+            return
+
+        msg = format_auto_close_failed(
+            trigger_exchange, trigger_ticker,
+            connector.name, leg.ticker, close_exchange_units,
+        )
+        task = asyncio.create_task(self._send_critical_alert(msg))
+        self._pending_tasks.add(task)
+        task.add_done_callback(self._pending_tasks.discard)
+
+    async def _send_reduction_alert_raw(self, msg: str) -> None:
+        """Отправляет готовое сообщение в ALERT_CHAT_IDS."""
+        if not self._telegram:
+            return
+        alert_ids = self._alert_chat_ids()
+        for chat_id in alert_ids:
+            message_id = await self._telegram.send_alert_tracked(chat_id, msg)
+            if message_id is not None:
+                _add_alert_message_id(chat_id, message_id)
 
     async def _send_session_start(self) -> None:
         """Отправляет разделитель сессии в ALERT_CHAT_IDS при старте."""
@@ -461,11 +561,10 @@ class MonitoringEngine:
 
     async def start(self) -> None:
         await asyncio.gather(*(c.start() for c in self._connectors))
-        pairs_init_delay = int(os.environ.get("PAIRS_INIT_DELAY", "10"))
+        pairs_init_delay = int(os.environ.get("STRUCTURES_INIT_DELAY", "10"))
         await asyncio.sleep(pairs_init_delay)
-        pairs, active_raw = self._load_pairs_from_file()
-        self._pairs = pairs
-        self._check_pairs_reductions(active_raw)
+        self._structures = self._load_structures_from_file()
+        self._check_leg_not_found_alerts(self._structures)
         if self._telegram:
             await self._telegram.start()
             self._telegram.start_polling()
@@ -475,7 +574,7 @@ class MonitoringEngine:
         await self._send_session_start()
         self._engine_tasks = [
             asyncio.create_task(self._loop_stale_check()),
-            asyncio.create_task(self._loop_pairs_reload()),
+            asyncio.create_task(self._loop_structures_reload()),
         ]
 
     async def stop(self) -> None:
