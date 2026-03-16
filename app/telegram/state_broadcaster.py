@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Callable
 
 from app.connectors.model.state import ExchangeState
-from app.telegram.formatters import format_exchange_state
+from app.telegram.formatters import format_all_states_brief
 from app.telegram.service import TelegramAlertService
 
 logger = logging.getLogger(__name__)
@@ -15,7 +15,7 @@ _STATE_FILE = Path(__file__).parent.parent.parent / "data" / ".state_messages.js
 
 
 def _load_saved_ids() -> dict[str, dict[str, int]]:
-    # Структура: {chat_id: {exchange_name: message_id}}
+    # Структура: {chat_id: {key: message_id}}
     if not _STATE_FILE.exists():
         return {}
     try:
@@ -48,7 +48,7 @@ class StateBroadcaster:
         self._chat_ids = chat_ids
         self._update_interval = update_interval
         self._pairs_state_fn = pairs_state_fn
-        # {chat_id: {exchange_name: message_id}}
+        # {chat_id: {"__state__": message_id, "__pairs__": message_id}}
         self._message_ids: dict[str, dict[str, int]] = {}
         self._task: asyncio.Task | None = None
 
@@ -57,21 +57,20 @@ class StateBroadcaster:
         saved = _load_saved_ids()
         if saved:
             delete_coros = []
-            for chat_id, exchange_msgs in saved.items():
-                for exchange_name, message_id in exchange_msgs.items():
+            for chat_id, msgs in saved.items():
+                for message_id in msgs.values():
                     delete_coros.append(self._service.delete_message(chat_id, message_id))
             if delete_coros:
                 await asyncio.gather(*delete_coros, return_exceptions=True)
 
-        # Отправить начальные сообщения для каждого коннектора в каждый чат
-        for exchange_name, state in self._states.items():
-            text = format_exchange_state(state)
-            for chat_id in self._chat_ids:
-                message_id = await self._service.send_message(chat_id, text)
-                if message_id is not None:
-                    if chat_id not in self._message_ids:
-                        self._message_ids[chat_id] = {}
-                    self._message_ids[chat_id][exchange_name] = message_id
+        # Отправить одно сводное сообщение по всем коннекторам в каждый чат
+        text = format_all_states_brief(self._states)
+        for chat_id in self._chat_ids:
+            message_id = await self._service.send_message(chat_id, text)
+            if message_id is not None:
+                if chat_id not in self._message_ids:
+                    self._message_ids[chat_id] = {}
+                self._message_ids[chat_id]["__state__"] = message_id
 
         if self._pairs_state_fn is not None:
             pairs_text = self._pairs_state_fn()
@@ -101,23 +100,16 @@ class StateBroadcaster:
             await self._update_all()
 
     async def _update_all(self) -> None:
-        connector_names = list(self._states.keys())
-        coros = []
-        for exchange_name in connector_names:
-            state = self._states.get(exchange_name)
-            if state is None:
-                continue
-            text = format_exchange_state(state)
-            for chat_id in self._chat_ids:
-                coros.append(self._update_one(chat_id, exchange_name, text))
+        text = format_all_states_brief(self._states)
+        coros = [self._update_one(chat_id, "__state__", text) for chat_id in self._chat_ids]
         if self._pairs_state_fn is not None:
             pairs_text = self._pairs_state_fn()
             for chat_id in self._chat_ids:
                 coros.append(self._update_one(chat_id, "__pairs__", pairs_text))
         await asyncio.gather(*coros, return_exceptions=True)
 
-    async def _update_one(self, chat_id: str, exchange_name: str, text: str) -> None:
-        existing_id = self._message_ids.get(chat_id, {}).get(exchange_name)
+    async def _update_one(self, chat_id: str, key: str, text: str) -> None:
+        existing_id = self._message_ids.get(chat_id, {}).get(key)
         if existing_id is not None:
             try:
                 await self._service.edit_message(chat_id, existing_id, text)
@@ -128,7 +120,7 @@ class StateBroadcaster:
                     "Failed to edit message %s in chat %s for %s, sending new",
                     existing_id,
                     chat_id,
-                    exchange_name,
+                    key,
                 )
 
         # Отправляем новое сообщение
@@ -136,5 +128,5 @@ class StateBroadcaster:
         if message_id is not None:
             if chat_id not in self._message_ids:
                 self._message_ids[chat_id] = {}
-            self._message_ids[chat_id][exchange_name] = message_id
+            self._message_ids[chat_id][key] = message_id
             _save_ids(self._message_ids)

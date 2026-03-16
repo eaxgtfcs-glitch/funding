@@ -1,11 +1,16 @@
+from __future__ import annotations
+
 from datetime import datetime
 from datetime import timezone as _tz
 from decimal import Decimal
+from typing import TYPE_CHECKING
 
 from app.connectors.config import get_notify_tz
 from app.connectors.model.position import Position
 from app.connectors.model.state import ExchangeState
-from app.engine.model.structure import Structure
+
+if TYPE_CHECKING:
+    from app.engine.model.structure import Structure
 
 
 def _to_notify_tz(dt: datetime) -> datetime:
@@ -89,17 +94,18 @@ def _fmt_price(value: Decimal) -> str:
     return f"{integer_part}.{decimal_part}"
 
 
-def _fmt_margin_ratio(ratio: Decimal | None) -> str:
+def _fmt_margin_ratio(ratio: Decimal | None) -> tuple[str, str]:
+    """Returns (emoji, text) where text is e.g. '12.3%'."""
     if ratio is None:
-        return f"{0.0:.1f}%"
+        return "⚪", f"{0.0:.1f}%"
     v = float(ratio)
     if v <= 30:
-        color = "🟢"
+        emoji = "🟢"
     elif v <= 50:
-        color = "🟡"
+        emoji = "🟡"
     else:
-        color = "🔴"
-    return f"{color} {v:.1f}%"
+        emoji = "🔴"
+    return emoji, f"{v:.1f}%"
 
 
 def format_high_margin_ratio_alert(state: ExchangeState) -> str:
@@ -188,7 +194,8 @@ def format_exchange_state(state: ExchangeState) -> str:
     if state.maintenance_margin > 0:
         lines.append(f"  Current:  <code>{_fmt_num(state.current_margin)}</code>")
         lines.append(f"  Required: <code>{_fmt_num(state.maintenance_margin)}</code>")
-        lines.append(f"  Ratio:    <code>{_fmt_margin_ratio(state.margin_ratio)}</code>")
+        ratio_emoji, ratio_text = _fmt_margin_ratio(state.margin_ratio)
+        lines.append(f"  Ratio:    <code>{ratio_emoji} {ratio_text}</code>")
     else:
         lines.append(f"  Current:  <code>{_fmt_num(state.current_margin)}</code>")
         lines.append(f"  Required: <code>{_fmt_num(state.maintenance_margin)}</code>")
@@ -262,6 +269,44 @@ def format_structure_imbalance(
                 f"  qty <code>{leg['amount']}</code>"
             )
     return "\n".join(lines)
+
+
+def format_all_states_brief(states: dict[str, ExchangeState]) -> str:
+    now_local = _to_notify_tz(datetime.now(tz=_tz.utc))
+    tz_label = now_local.strftime("%Z") or now_local.strftime("%z")
+    header = f"<b>Monitor</b>  |  {now_local.strftime('%H:%M:%S')} {tz_label}"
+
+    if not states:
+        return header
+
+    # Собираем сырые значения для всех бирж
+    rows = []
+    for name, state in states.items():
+        pos_count = len(state.positions)
+        ratio_emoji, ratio_text = _fmt_margin_ratio(state.margin_ratio)
+        margin_str = f"{_fmt_num(state.current_margin)} / {_fmt_num(state.maintenance_margin)}"
+        pos_str = f"{pos_count} pos"
+        rows.append((name.upper(), ratio_emoji, ratio_text, margin_str, pos_str))
+
+    # Вычисляем максимальные ширины по каждой колонке.
+    # Для ratio выравниваем только text-часть (числа), emoji выводим отдельно —
+    # это гарантирует ровное выравнивание независимо от визуальной ширины emoji.
+    max_name = max(len(r[0]) for r in rows)
+    max_ratio_text = max(len(r[2]) for r in rows)
+    max_margin = max(len(r[3]) for r in rows)
+    max_pos = max(len(r[4]) for r in rows)
+
+    pre_lines = []
+    for name_upper, ratio_emoji, ratio_text, margin_str, pos_str in rows:
+        name_col = name_upper.ljust(max_name)
+        ratio_col = f"{ratio_emoji} {ratio_text.rjust(max_ratio_text)}"
+        margin_col = margin_str.ljust(max_margin)
+        pos_col = pos_str.ljust(max_pos)
+        pre_lines.append(
+            f"{name_col}  {ratio_col}  |  {margin_col}  |  {pos_col}"
+        )
+    pre_block = "<pre>" + "\n".join(pre_lines) + "</pre>"
+    return header + "\n\n" + pre_block + "\n"
 
 
 def format_structures_state(structures: list[Structure], states: dict[str, ExchangeState]) -> str:

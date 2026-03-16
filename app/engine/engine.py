@@ -439,12 +439,14 @@ class MonitoringEngine:
                 "close_exchange_units": close_exchange_y,
                 "amount_before": pos.amount if pos else Decimal(0),
             })
-
+        closed_leg_info = None
         # Отправляем алерт об имбалансе
-        closed_leg_info = [
-            {"exchange": cl["leg"].exchange, "ticker": cl["leg"].ticker, "amount": cl["close_exchange_units"]}
-            for cl in close_legs
-        ]
+        if not READ_ONLY_MODE:
+            closed_leg_info = [
+                {"exchange": cl["leg"].exchange, "ticker": cl["leg"].ticker, "amount": cl["close_exchange_units"]}
+                for cl in close_legs
+            ]
+
         msg = format_structure_imbalance(
             trigger_exchange, trigger_ticker, old_amount, new_amount,
             closed_legs=closed_leg_info,
