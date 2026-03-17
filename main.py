@@ -9,6 +9,7 @@ logger = logging.getLogger(__name__)
 
 
 async def main() -> None:
+    logger.critical("Starting application")
     from dotenv import load_dotenv
     load_dotenv()
     from app.engine.engine import MonitoringEngine
