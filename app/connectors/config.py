@@ -18,7 +18,7 @@ DEFAULT_CONFIG = ConnectorConfig()
 CRITICAL_ALERT_SEND_COUNT: int = int(os.environ.get("CRITICAL_ALERT_SEND_COUNT", "3"))
 CRITICAL_ALERT_REPEAT_INTERVAL: int = int(os.environ.get("CRITICAL_ALERT_REPEAT_INTERVAL", "5"))
 NOTIFY_TIMEZONE = os.environ.get("NOTIFY_TIMEZONE", "UTC")
-READ_ONLY_MODE: bool = os.environ.get("READ_ONLY_MODE", "false").lower() == "true"
+READ_ONLY_MODE: bool = os.environ.get("READ_ONLY_MODE", "true").lower() == "true"
 
 
 def get_notify_tz() -> tzinfo:

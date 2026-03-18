@@ -96,7 +96,7 @@ def _fmt_price(value: Decimal) -> str:
 
 def _fmt_margin_ratio(ratio: Decimal | None) -> tuple[str, str]:
     """Returns (emoji, text) where text is e.g. '12.3%'."""
-    if ratio is None:
+    if ratio is None or ratio == Decimal(0):
         return "⚪", f"{0.0:.1f}%"
     v = float(ratio)
     if v <= 30:
