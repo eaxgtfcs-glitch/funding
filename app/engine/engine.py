@@ -13,7 +13,6 @@ import app.connectors as connectors_pkg
 from app.connectors.base import BaseExchangeConnector
 from app.connectors.config import (
     CRITICAL_ALERT_SEND_COUNT,
-    CRITICAL_ALERT_REPEAT_INTERVAL,
     READ_ONLY_MODE,
 )
 from app.connectors.model.state import ExchangeState
@@ -82,8 +81,14 @@ class MonitoringEngine:
         # Задачи фоновых циклов движка
         self._engine_tasks: list[asyncio.Task] = []
         self._pending_tasks: set[asyncio.Task] = set()
+        self._queue = None
         self._discover_connectors()
         self._setup_telegram()
+        if self._telegram:
+            from app.telegram.queue import TelegramQueue
+            self._queue = TelegramQueue()
+            if self._broadcaster:
+                self._broadcaster._queue = self._queue
 
     def _discover_connectors(self) -> None:
         """Автоматически обнаруживает и инстанциирует все неабстрактные подклассы BaseExchangeConnector."""
@@ -129,6 +134,7 @@ class MonitoringEngine:
             chat_ids=chat_ids,
             update_interval=update_interval,
             pairs_state_fn=lambda: format_structures_state(self._structures, self.states),
+            queue=None,
         )
 
     def _critical_chat_ids(self) -> list[str]:
@@ -220,40 +226,50 @@ class MonitoringEngine:
     # -------------------------------------------------------------------------
 
     async def _send_critical_alert(self, msg: str) -> None:
+        from app.telegram.queue import TelegramQueue
         critical_ids = self._critical_chat_ids()
-        if not critical_ids or not self._telegram:
+        if not critical_ids or not self._telegram or not self._queue:
             return
         for i in range(CRITICAL_ALERT_SEND_COUNT):
-            if i > 0:
-                await asyncio.sleep(CRITICAL_ALERT_REPEAT_INTERVAL)
             for chat_id in critical_ids:
-                message_id = await self._telegram.send_alert_tracked(chat_id, msg)
-                if message_id is not None:
-                    _add_alert_message_id(chat_id, message_id)
+                async def _send(chat_id=chat_id, msg=msg):
+                    message_id = await self._telegram.send_alert_tracked(chat_id, msg)
+                    if message_id is not None:
+                        _add_alert_message_id(chat_id, message_id)
+
+                self._queue.enqueue(TelegramQueue.CRITICAL, _send)
 
     async def _send_reduction_alert(self, reductions: list[dict]) -> None:
         """Отправляет батч-алерт о сокращениях с повторами согласно конфигу."""
-        if not self._telegram:
+        from app.telegram.queue import TelegramQueue
+        if not self._telegram or not self._queue:
             return
         alert_ids = self._alert_chat_ids()
         if not alert_ids:
             return
         msg = format_position_reduction_batch(reductions)
         for chat_id in alert_ids:
-            message_id = await self._telegram.send_alert_tracked(chat_id, msg)
-            if message_id is not None:
-                _add_alert_message_id(chat_id, message_id)
+            async def _send(chat_id=chat_id, msg=msg):
+                message_id = await self._telegram.send_alert_tracked(chat_id, msg)
+                if message_id is not None:
+                    _add_alert_message_id(chat_id, message_id)
+
+            self._queue.enqueue(TelegramQueue.ALERT, _send)
 
     async def _send_structure_alert(self, msg: str) -> None:
-        if not self._telegram:
+        from app.telegram.queue import TelegramQueue
+        if not self._telegram or not self._queue:
             return
         pairs_ids = self._pairs_alert_chat_ids()
         if not pairs_ids:
             return
         for chat_id in pairs_ids:
-            message_id = await self._telegram.send_alert_tracked(chat_id, msg)
-            if message_id is not None:
-                _add_alert_message_id(chat_id, message_id)
+            async def _send(chat_id=chat_id, msg=msg):
+                message_id = await self._telegram.send_alert_tracked(chat_id, msg)
+                if message_id is not None:
+                    _add_alert_message_id(chat_id, message_id)
+
+            self._queue.enqueue(TelegramQueue.ALERT, _send)
 
     def _load_structures_from_file(self) -> list[Structure]:
         try:
@@ -527,26 +543,34 @@ class MonitoringEngine:
 
     async def _send_reduction_alert_raw(self, msg: str) -> None:
         """Отправляет готовое сообщение в ALERT_CHAT_IDS."""
-        if not self._telegram:
+        from app.telegram.queue import TelegramQueue
+        if not self._telegram or not self._queue:
             return
         alert_ids = self._alert_chat_ids()
         for chat_id in alert_ids:
-            message_id = await self._telegram.send_alert_tracked(chat_id, msg)
-            if message_id is not None:
-                _add_alert_message_id(chat_id, message_id)
+            async def _send(chat_id=chat_id, msg=msg):
+                message_id = await self._telegram.send_alert_tracked(chat_id, msg)
+                if message_id is not None:
+                    _add_alert_message_id(chat_id, message_id)
+
+            self._queue.enqueue(TelegramQueue.ALERT, _send)
 
     async def _send_session_start(self) -> None:
         """Отправляет разделитель сессии в ALERT_CHAT_IDS при старте."""
-        if not self._telegram:
+        from app.telegram.queue import TelegramQueue
+        if not self._telegram or not self._queue:
             return
         alert_ids = self._alert_chat_ids()
         if not alert_ids:
             return
         msg = format_session_start_separator()
         for chat_id in alert_ids:
-            message_id = await self._telegram.send_alert_tracked(chat_id, msg)
-            if message_id is not None:
-                _add_alert_message_id(chat_id, message_id)
+            async def _send(chat_id=chat_id, msg=msg):
+                message_id = await self._telegram.send_alert_tracked(chat_id, msg)
+                if message_id is not None:
+                    _add_alert_message_id(chat_id, message_id)
+
+            self._queue.enqueue(TelegramQueue.ALERT, _send)
 
     async def _delete_all_tracked_messages(self) -> None:
         """Delete all previously tracked alert messages from all chats."""
@@ -567,6 +591,8 @@ class MonitoringEngine:
         await asyncio.sleep(pairs_init_delay)
         self._structures = self._load_structures_from_file()
         self._check_leg_not_found_alerts(self._structures)
+        if self._queue:
+            await self._queue.start()
         if self._telegram:
             await self._telegram.start()
             self._telegram.start_polling()
@@ -586,6 +612,8 @@ class MonitoringEngine:
         self._engine_tasks.clear()
         if self._broadcaster:
             await self._broadcaster.stop()
+        if self._queue:
+            await self._queue.stop()
         if self._telegram:
             await self._telegram.stop_polling()
             await self._telegram.stop()
