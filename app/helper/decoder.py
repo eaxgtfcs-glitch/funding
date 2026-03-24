@@ -45,13 +45,6 @@ def decrypt_str(input_base64, key_base64, iv_base64):
     return plain_text.decode('utf-8')
 
 
-def create_random_secret():
-    key = b64encode(os.urandom(32)).decode('utf-8')  # Генерация случайного ключа длиной 32 байт
-    iv = b64encode(os.urandom(16)).decode('utf-8')  # Генерация случайного iv длиной 16 байт
-    print(key)  # засунь этот key в файл .env
-    print(iv)  # засунь этот iv в файл .env
-
-
 def encrypt(string: str):
     return encrypt_str(string, KEY, IV)
 
@@ -62,7 +55,3 @@ def decrypt(string: str):
 
 def generate_password(length: int = 10):
     return ''.join(secrets.choice(alphabet) for _ in range(length))
-
-
-if __name__ == '__main__':
-    create_random_secret()

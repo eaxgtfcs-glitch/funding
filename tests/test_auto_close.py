@@ -49,7 +49,10 @@ class AlphaConnector(BaseExchangeConnector):
     async def fetch_margin(self) -> tuple[Decimal, Decimal]:
         return Decimal(0), Decimal(0)
 
-    async def close_position(self, ticker: str, amount: Decimal) -> None:
+    async def place_order(self, ticker, direction, amount, order_type="market", limit_price=None) -> bool:
+        return True
+
+    async def close_position(self, ticker: str, amount: Decimal, order_type="market", limit_price=None) -> bool:
         pass
 
 
@@ -65,7 +68,10 @@ class BetaConnector(BaseExchangeConnector):
     async def fetch_margin(self) -> tuple[Decimal, Decimal]:
         return Decimal(0), Decimal(0)
 
-    async def close_position(self, ticker: str, amount: Decimal) -> None:
+    async def place_order(self, ticker, direction, amount, order_type="market", limit_price=None) -> bool:
+        return True
+
+    async def close_position(self, ticker: str, amount: Decimal, order_type="market", limit_price=None) -> bool:
         pass
 
 
@@ -459,7 +465,7 @@ class TestAutoCloseStructureLeg:
     async def test_first_attempt_exception_then_second_success_sends_success_alert(self):
         engine, connector_b = self._make_engine_and_connector_b()
         connector_b.close_position = AsyncMock(
-            side_effect=[RuntimeError("timeout"), None]
+            side_effect=[RuntimeError("timeout"), True]
         )
 
         pos_after = _make_position("BTCUSDT", "beta", "short", "6.0")

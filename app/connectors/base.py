@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable, Coroutine
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 
 from app.connectors.config import DEFAULT_CONFIG, ConnectorConfig
 from app.connectors.model.position import Position
@@ -44,8 +44,56 @@ class BaseExchangeConnector(ABC):
         """Return from the exchange maintenance_margin and current_margin."""
 
     @abstractmethod
-    async def close_position(self, ticker: str, amount: Decimal) -> None:
-        ...
+    async def place_order(
+            self,
+            ticker: str,
+            direction: Literal["long", "short"],
+            amount: Decimal,
+            order_type: Literal["market", "limit"] = "market",
+            limit_price: Decimal | None = None,
+    ) -> bool:
+        """Открыть позицию. Возвращает True если ордер принят биржей (200 OK).
+
+        Raises:
+            ValueError: если order_type="limit" и limit_price=None
+        """
+
+    @abstractmethod
+    async def close_position(
+            self,
+            ticker: str,
+            amount: Decimal,
+            order_type: Literal["market", "limit"] = "market",
+            limit_price: Decimal | None = None,
+    ) -> bool:
+        """Закрыть позицию. Возвращает True если ордер принят биржей (200 OK).
+
+        Raises:
+            ValueError: если order_type="limit" и limit_price=None
+        """
+
+    async def _verify_position_changed(
+            self,
+            ticker: str,
+            snapshot: list[Position],
+    ) -> bool:
+        """Проверяет, изменилась ли позиция по ticker относительно snapshot.
+
+        Делает 2 попытки с интервалом 2 секунды. Возвращает True при первом
+        зафиксированном изменении, False если ни одна попытка не подтвердила.
+        """
+        snapshot_amount = next(
+            (p.amount for p in snapshot if p.ticker == ticker), Decimal(0)
+        )
+        for _ in range(2):
+            await asyncio.sleep(2)
+            fresh = await self.fetch_positions()
+            fresh_amount = next(
+                (p.amount for p in fresh if p.ticker == ticker), Decimal(0)
+            )
+            if fresh_amount != snapshot_amount:
+                return True
+        return False
 
     async def start(self) -> None:
         self._tasks = [

@@ -102,7 +102,7 @@ class TestBackpackSign:
 
         assert len(captured_messages) == 1
         decoded = captured_messages[0].decode()
-        assert decoded.startswith("orderExecute&")
+        assert decoded.startswith("instruction=orderExecute&")
 
     def test_sign_params_are_sorted_alphabetically(self):
         """Параметры в строке подписи должны идти в алфавитном порядке."""
@@ -158,7 +158,7 @@ class TestBackpackSign:
         decoded = captured_messages[0].decode()
         # Без параметров структура: collateralQuery&timestamp=...&window=5000
         parts = decoded.split("&")
-        assert parts[0] == "collateralQuery"
+        assert parts[0] == "instruction=collateralQuery"
         assert parts[-1] == "window=5000"
         assert parts[-2].startswith("timestamp=")
 

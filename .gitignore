@@ -104,8 +104,10 @@ celerybeat.pid
 # Environments
 .env
 
-# Продовые тесты — боевые креды
+# Продовые и live-test-тесты — боевые креды
 tests/prod/creds.json
+live-test/test-params.json
+live-test/creds
 .venv
 _data
 _import

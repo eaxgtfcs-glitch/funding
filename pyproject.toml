@@ -15,6 +15,8 @@ cryptography = "44.0.2"
 eth-account = "0.13.7"
 msgpack = "*"
 eth-hash = { extras = ["pycryptodome"], version = "*" }
+apexpro = "*"
+lighter-sdk = "*"
 
 [tool.poetry.group.dev.dependencies]
 pytest = ">=8.0"

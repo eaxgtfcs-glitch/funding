@@ -1,0 +1,22 @@
+# Credentials for live connector tests.
+# Copy this file to scripts/live/creds and fill in your keys.
+# Format is identical to .env_example — you can copy-paste any section from there.
+
+APEX_API_KEY=
+APEX_API_SECRET=
+APEX_PASSPHRASE=
+APEX_ZK_SEEDS=
+
+GATE_API_KEY=
+GATE_SECRET_KEY=
+
+OKX_API_KEY=
+OKX_SECRET_KEY=
+OKX_PASSPHRASE=
+
+
+PHEMEX_API_KEY=
+PHEMEX_SECRET_KEY=
+
+REYA_WALLET_ADDRESS=
+REYA_PRIVATE_KEY=

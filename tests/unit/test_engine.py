@@ -38,7 +38,10 @@ class StubConnector(BaseExchangeConnector):
     async def fetch_margin(self) -> tuple[Decimal, Decimal]:
         return Decimal(0), Decimal(0)
 
-    async def close_position(self, ticker: str, amount: Decimal) -> None:
+    async def place_order(self, ticker, direction, amount, order_type="market", limit_price=None) -> bool:
+        return True
+
+    async def close_position(self, ticker: str, amount: Decimal, order_type="market", limit_price=None) -> bool:
         pass
 
 
@@ -57,7 +60,10 @@ class AnotherStubConnector(BaseExchangeConnector):
     async def fetch_margin(self) -> tuple[Decimal, Decimal]:
         return Decimal(0), Decimal(0)
 
-    async def close_position(self, ticker: str, amount: Decimal) -> None:
+    async def place_order(self, ticker, direction, amount, order_type="market", limit_price=None) -> bool:
+        return True
+
+    async def close_position(self, ticker: str, amount: Decimal, order_type="market", limit_price=None) -> bool:
         pass
 
 

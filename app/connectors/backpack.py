@@ -1,13 +1,14 @@
 import base64
-import os
 import time
 from decimal import Decimal
+from typing import Literal
 
 import httpx
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from app.connectors.base import BaseExchangeConnector
 from app.connectors.model.position import Position
+from app.helper.key_vault import vault
 
 _BASE_URL = "https://api.backpack.exchange"
 _WINDOW = "5000"
@@ -18,8 +19,8 @@ class BackpackConnector(BaseExchangeConnector):
 
     def __init__(self) -> None:
         super().__init__()
-        self._api_key = os.environ["BACKPACK_API_KEY"]
-        self._api_secret = os.environ["BACKPACK_API_SECRET"]
+        self._api_key = vault.get("BACKPACK_API_KEY")
+        self._api_secret = vault.get("BACKPACK_API_SECRET")
         self._client = httpx.AsyncClient(base_url=_BASE_URL)
 
     def _sign(self, instruction: str, params: dict) -> dict:
@@ -71,17 +72,28 @@ class BackpackConnector(BaseExchangeConnector):
         current_margin = Decimal(data["netEquity"])
         return maintenance_margin, current_margin
 
-    async def close_position(self, ticker: str, amount: Decimal) -> None:
-        pos = self.state.positions.get(ticker)
-        side = "Ask" if (pos and pos.direction == "long") else "Bid"
-        body = {
-            "orderType": "Market",
+    def _build_order_body(
+            self,
+            ticker: str,
+            side: str,
+            amount: Decimal,
+            order_type: str,
+            limit_price: Decimal | None,
+            reduce_only: bool,
+    ) -> dict:
+        body: dict = {
+            "orderType": "Market" if order_type == "market" else "Limit",
             "quantity": str(amount),
-            "reduceOnly": True,
+            "reduceOnly": reduce_only,
             "side": side,
             "symbol": ticker,
         }
+        if order_type == "limit":
+            body["price"] = str(limit_price)
+            body["timeInForce"] = "GTC"
+        return body
 
+    async def _send_order(self, body: dict) -> bool:
         def _bool_to_str(v):
             if isinstance(v, bool):
                 return "true" if v else "false"
@@ -92,7 +104,42 @@ class BackpackConnector(BaseExchangeConnector):
         headers["Content-Type"] = "application/json"
         resp = await self._client.post("/api/v1/order", headers=headers, json=body)
         if not resp.is_success:
-            raise RuntimeError(f"Backpack close_position HTTP {resp.status_code}: {resp.text}")
+            raise RuntimeError(f"HTTP {resp.status_code}")
         data = resp.json()
         if isinstance(data, dict) and "error" in data:
-            raise RuntimeError(f"Backpack close_position error: {data['error']}")
+            raise RuntimeError(data["error"])
+        return True
+
+    async def place_order(
+            self,
+            ticker: str,
+            direction: Literal["long", "short"],
+            amount: Decimal,
+            order_type: Literal["market", "limit"] = "market",
+            limit_price: Decimal | None = None,
+    ) -> bool:
+        if order_type == "limit" and limit_price is None:
+            raise ValueError("limit_price required for limit orders")
+        snapshot = await self.fetch_positions()
+        side = "Bid" if direction == "long" else "Ask"
+        body = self._build_order_body(ticker, side, amount, order_type, limit_price, False)
+        ok = await self._send_order(body)
+        if not ok:
+            return False
+        if order_type == "market":
+            return await self._verify_position_changed(ticker, snapshot)
+        return True
+
+    async def close_position(
+            self,
+            ticker: str,
+            amount: Decimal,
+            order_type: Literal["market", "limit"] = "market",
+            limit_price: Decimal | None = None,
+    ) -> bool:
+        if order_type == "limit" and limit_price is None:
+            raise ValueError("limit_price required for limit orders")
+        pos = self.state.positions.get(ticker)
+        side = "Ask" if (pos and pos.direction == "long") else "Bid"
+        body = self._build_order_body(ticker, side, amount, order_type, limit_price, True)
+        return await self._send_order(body)

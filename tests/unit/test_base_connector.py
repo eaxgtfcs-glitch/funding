@@ -39,7 +39,10 @@ class FakeConnector(BaseExchangeConnector):
     async def fetch_margin(self) -> tuple[Decimal, Decimal]:
         raise NotImplementedError  # будет замокан в тестах
 
-    async def close_position(self, ticker: str, amount: Decimal) -> None:
+    async def place_order(self, ticker, direction, amount, order_type="market", limit_price=None) -> bool:
+        raise NotImplementedError
+
+    async def close_position(self, ticker: str, amount: Decimal, order_type="market", limit_price=None) -> bool:
         raise NotImplementedError  # будет замокан в тестах при необходимости
 
 

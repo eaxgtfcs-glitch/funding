@@ -91,33 +91,17 @@ cd funding;git pull https://github.com/eaxgtfcs-glitch/funding;docker stop fundi
   --name funding \
   --restart unless-stopped \
   --env-file .env \
-  -v $(pwd)/data:/app/data \
   funding-app;docker logs -f funding
 ```
 
 ```powerShell (Windows)
- git pull https://github.com/eaxgtfcs-glitch/funding;docker stop funding; docker rm funding; docker build -t funding-app .; docker run -d --name funding --restart unless-stopped --env-file .env -v ${PWD}/data:/app/data funding-app; docker logs -f funding
+ git pull https://github.com/eaxgtfcs-glitch/funding;docker stop funding; docker rm funding; docker build -t funding-app .; docker run -d --name funding --restart unless-stopped --env-file .env funding-app; docker logs -f funding
 ```
 Должны появиться логи вида:
 
 ```
 2026-03-18 16:39:47,171 CRITICAL __main__ — Starting application
 ```
-
-> Флаг `-v $(pwd)/data:/app/data` монтирует папку `data/` с хоста внутрь контейнера.
-> Файл `data/structures.json` можно редактировать прямо на сервере — приложение перечитывает его автоматически.
-
----
-
-## Редактирование structures.json на ходу
-
-```bash
-nano data/structures.json
-```
-
-Сохрани файл — приложение подхватит изменения без перезапуска контейнера.
-
----
 
 ## Управление контейнером
 

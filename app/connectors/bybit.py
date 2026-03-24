@@ -2,14 +2,15 @@ import asyncio
 import hashlib
 import hmac
 import json as _json
-import os
 import time
 from decimal import Decimal
+from typing import Literal
 
 import httpx
 
 from app.connectors.base import BaseExchangeConnector
 from app.connectors.model.position import Position
+from app.helper.key_vault import vault
 
 _BASE_URL = "https://api.bybit.com"
 _RECV_WINDOW = "5000"
@@ -20,8 +21,8 @@ class BybitConnector(BaseExchangeConnector):
 
     def __init__(self) -> None:
         super().__init__()
-        self._api_key = os.environ["BYBIT_API_KEY"]
-        self._api_secret = os.environ["BYBIT_API_SECRET"]
+        self._api_key = vault.get("BYBIT_API_KEY")
+        self._api_secret = vault.get("BYBIT_API_SECRET")
         self._client = httpx.AsyncClient(base_url=_BASE_URL)
 
     def _sign(self, query_string: str) -> dict:
@@ -87,24 +88,72 @@ class BybitConnector(BaseExchangeConnector):
             "Content-Type": "application/json",
         }
 
-    async def close_position(self, ticker: str, amount: Decimal) -> None:
+    async def place_order(
+            self,
+            ticker: str,
+            direction: Literal["long", "short"],
+            amount: Decimal,
+            order_type: Literal["market", "limit"] = "market",
+            limit_price: Decimal | None = None,
+    ) -> bool:
+        if order_type == "limit" and limit_price is None:
+            raise ValueError("limit_price required for limit orders")
+        snapshot = await self.fetch_positions()
+        side = "Buy" if direction == "long" else "Sell"
+        body = {
+            "category": "linear",
+            "symbol": ticker,
+            "side": side,
+            "orderType": "Market" if order_type == "market" else "Limit",
+            "qty": str(amount),
+        }
+        if order_type == "limit":
+            body["price"] = str(limit_price)
+        headers = self._sign_body(body)
+        resp = await self._client.post("/v5/order/create", headers=headers,
+                                       content=_json.dumps(body, separators=(",", ":")))
+        if not resp.is_success:
+            return False
+        data = resp.json()
+        if data.get("retCode") != 0:
+            return False
+        if order_type == "market":
+            return await self._verify_position_changed(ticker, snapshot)
+        return True
+
+    async def close_position(
+            self,
+            ticker: str,
+            amount: Decimal,
+            order_type: Literal["market", "limit"] = "market",
+            limit_price: Decimal | None = None,
+    ) -> bool:
+        if order_type == "limit" and limit_price is None:
+            raise ValueError("limit_price required for limit orders")
+        snapshot = await self.fetch_positions()
         pos = self.state.positions.get(ticker)
         side = "Sell" if (pos and pos.direction == "long") else "Buy"
         body = {
             "category": "linear",
             "symbol": ticker,
             "side": side,
-            "orderType": "Market",
+            "orderType": "Market" if order_type == "market" else "Limit",
             "qty": str(amount),
             "reduceOnly": True,
         }
+        if order_type == "limit":
+            body["price"] = str(limit_price)
         headers = self._sign_body(body)
         resp = await self._client.post("/v5/order/create", headers=headers,
                                        content=_json.dumps(body, separators=(",", ":")))
-        resp.raise_for_status()
+        if not resp.is_success:
+            return False
         data = resp.json()
         if data.get("retCode") != 0:
-            raise RuntimeError(f"Bybit close_position error: {data.get('retMsg')} (retCode={data.get('retCode')})")
+            return False
+        if order_type == "market":
+            return await self._verify_position_changed(ticker, snapshot)
+        return True
 
     async def fetch_margin(self) -> tuple[Decimal, Decimal]:
         query = "accountType=UNIFIED"

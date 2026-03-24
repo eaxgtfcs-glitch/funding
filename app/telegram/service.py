@@ -21,6 +21,7 @@ class TelegramAlertService:
             raise ValueError("bot_token must not be empty")
         self._base = _TELEGRAM_API_BASE.format(token=bot_token)
         self._client: httpx.AsyncClient | None = None
+        self.on_message: object = None  # async callable(chat_id, text, from_user)
 
     async def start(self) -> None:
         self._client = httpx.AsyncClient(timeout=5)
@@ -193,14 +194,19 @@ class TelegramAlertService:
                     chat_type = chat.get("type", "unknown")
                     sender = msg.get("from") or {}
                     from_user = sender.get("username") or sender.get("first_name") or "unknown"
+                    sender_id = sender.get("id")
                     text = msg.get("text") or msg.get("caption") or "[non-text]"
                     logger.info(
-                        "TG incoming: chat_id=%s type=%s from=%s text=%r",
+                        "TG incoming: chat_id=%s type=%s from=%s sender_id=%s text=%r",
                         chat_id,
                         chat_type,
                         from_user,
+                        sender_id,
                         text,
                     )
+                    if self.on_message and chat_id is not None:
+                        msg_id = msg.get("message_id")
+                        asyncio.create_task(self.on_message(str(chat_id), text, from_user, sender_id, msg_id))
             except asyncio.CancelledError:
                 break
             except Exception as exc:
