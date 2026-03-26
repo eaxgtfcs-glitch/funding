@@ -17,6 +17,7 @@ msgpack = "*"
 eth-hash = { extras = ["pycryptodome"], version = "*" }
 lighter-sdk = "*"
 apexomni = "*"
+web3 = "^7.14.1"
 
 [tool.poetry.group.dev.dependencies]
 pytest = ">=8.0"
