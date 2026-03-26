@@ -18,6 +18,11 @@ eth-hash = { extras = ["pycryptodome"], version = "*" }
 lighter-sdk = "*"
 apexomni = "*"
 web3 = "^7.14.1"
+ecdsa = "*"
+numpy = "*"
+sympy = "*"
+mpmath = "*"
+websocket-client = "*"
 
 [tool.poetry.group.dev.dependencies]
 pytest = ">=8.0"
