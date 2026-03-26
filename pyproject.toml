@@ -20,9 +20,10 @@ apexomni = "*"
 web3 = "^7.14.1"
 ecdsa = "*"
 numpy = "*"
-sympy = "*"
+sympy = "<1.13"
 mpmath = "*"
 websocket-client = "*"
+simplejson = "*"
 
 [tool.poetry.group.dev.dependencies]
 pytest = ">=8.0"
