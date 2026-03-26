@@ -9,13 +9,13 @@ _logger = logging.getLogger(__name__)
 
 @dataclass
 class ConnectorConfig:
-    positions_interval: int = int(os.environ.get("POSITION_UPDATE_INTERVAL", "5"))
-    margin_interval: int = int(os.environ.get("MARGIN_UPDATE_INTERVAL", "5"))
+    positions_interval: int = int(os.environ.get("POSITION_UPDATE_INTERVAL", "15"))
+    margin_interval: int = int(os.environ.get("MARGIN_UPDATE_INTERVAL", "20"))
 
 
 DEFAULT_CONFIG = ConnectorConfig()
 
-CRITICAL_ALERT_SEND_COUNT: int = int(os.environ.get("CRITICAL_ALERT_SEND_COUNT", "3"))
+CRITICAL_ALERT_SEND_COUNT: int = int(os.environ.get("CRITICAL_ALERT_SEND_COUNT", "1"))
 CRITICAL_ALERT_REPEAT_INTERVAL: int = int(os.environ.get("CRITICAL_ALERT_REPEAT_INTERVAL", "5"))
 NOTIFY_TIMEZONE = os.environ.get("NOTIFY_TIMEZONE", "UTC")
 READ_ONLY_MODE: bool = os.environ.get("READ_ONLY_MODE", "false").lower() == "true"

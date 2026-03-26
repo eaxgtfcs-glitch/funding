@@ -124,11 +124,7 @@ class MonitoringEngine:
             logger.warning("STATE_CHAT_IDS not set — StateBroadcaster disabled")
             return
         chat_ids = _parse_chat_ids(state_chat_ids_raw)
-        try:
-            update_interval = int(os.environ.get("STATE_UPDATE_INTERVAL", "30"))
-        except ValueError:
-            logger.warning("Invalid STATE_UPDATE_INTERVAL value, using default 30s")
-            update_interval = 30
+        update_interval = int(os.environ.get("STATE_UPDATE_INTERVAL", "60"))
         self._broadcaster = StateBroadcaster(
             service=self._telegram,
             states=self.states,
