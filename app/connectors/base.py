@@ -116,7 +116,7 @@ class BaseExchangeConnector(ABC):
                 if self.on_positions_updated:
                     await self.on_positions_updated()
             except Exception as e:
-                logger.exception("Ошибка при обновлении позиций [%s]", self.name, e)
+                logger.exception("Ошибка при обновлении позиций [%s]", self.name)
             await asyncio.sleep(self.config.positions_interval)
 
     async def _loop_margin(self) -> None:

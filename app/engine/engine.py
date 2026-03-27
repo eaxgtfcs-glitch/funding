@@ -12,6 +12,7 @@ from pathlib import Path
 import app.connectors as connectors_pkg
 from app.connectors.base import BaseExchangeConnector
 from app.connectors.config import (
+    CRITICAL_ALERT_REPEAT_INTERVAL,
     CRITICAL_ALERT_SEND_COUNT,
     READ_ONLY_MODE,
 )
@@ -235,6 +236,8 @@ class MonitoringEngine:
                         _add_alert_message_id(chat_id, message_id)
 
                 self._queue.enqueue(TelegramQueue.CRITICAL, _send)
+            if i < CRITICAL_ALERT_SEND_COUNT - 1:
+                await asyncio.sleep(CRITICAL_ALERT_REPEAT_INTERVAL)
 
     async def _send_reduction_alert(self, reductions: list[dict]) -> None:
         """Отправляет батч-алерт о сокращениях с повторами согласно конфигу."""
@@ -277,7 +280,7 @@ class MonitoringEngine:
         if not text.startswith(cmd):
             return
         admin_id = self._admin_user_id()
-        if admin_id is not None and str(sender_id) != admin_id:
+        if admin_id is None or str(sender_id) != admin_id:
             logger.warning(
                 "Unauthorized set attempt from %s (id=%s)", from_user, sender_id
             )

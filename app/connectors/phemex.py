@@ -65,7 +65,7 @@ class PhemexConnector(BaseExchangeConnector):
                 ticker=item["symbol"],
                 exchange_name=self.name,
                 direction=direction,
-                amount=size,
+                amount=abs(size),
                 avg_price=avg_price,
                 current_price=mark_price,
             ))
